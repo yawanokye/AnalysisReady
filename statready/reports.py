@@ -224,9 +224,16 @@ def build_docx_report(
             if caption.runs:
                 caption.runs[0].italic = True
 
+    compact_row_limits = {
+        "Latent variable scores": 25,
+        "Cluster sizes": 30,
+        "Cluster residual influence screening": 30,
+        "Cross-loadings": 40,
+        "Factor scores": 25,
+    }
     for name, table in inferential_tables.items():
         document.add_heading(name, level=2)
-        _add_dataframe(document, table)
+        _add_dataframe(document, table, max_rows=compact_row_limits.get(name, 100))
 
     document.add_heading("Diagnostics and assumptions", level=1)
     if result.diagnostics.empty:

@@ -252,7 +252,7 @@ def render_latent_path_diagram(
     if fit_table is not None and not fit_table.empty:
         row = fit_table.iloc[0]
         fit_parts = []
-        for key, label in [("cfi", "CFI"), ("tli", "TLI"), ("rmsea", "RMSEA"), ("srmr", "SRMR")]:
+        for key, label in [("cfi", "CFI"), ("tli", "TLI"), ("rmsea", "RMSEA"), ("srmr", "SRMR"), ("srmr_approx", "SRMR")]:
             if key in row and pd.notna(row[key]):
                 fit_parts.append(f"{label}={float(row[key]):.3f}")
         if fit_parts:
@@ -287,5 +287,17 @@ def attach_latent_variable_figures(result: AnalysisResult) -> AnalysisResult:
                 path_table=pd.DataFrame(),
                 fit_table=result.tables.get("CFA fit indices", pd.DataFrame()),
                 title="Confirmatory factor analysis measurement diagram",
+            )
+    elif result.method == "Partial least squares structural equation model":
+        construct_map = result.metadata.get("construct_map") or {}
+        paths = [tuple(path) for path in (result.metadata.get("paths") or [])]
+        if construct_map:
+            result.figures["PLS-SEM path diagram"] = render_latent_path_diagram(
+                construct_map=construct_map,
+                loading_table=result.tables.get("PLS outer loadings", pd.DataFrame()),
+                paths=paths,
+                path_table=result.tables.get("PLS structural path estimates", pd.DataFrame()),
+                fit_table=result.tables.get("PLS-SEM model summary", pd.DataFrame()),
+                title="Partial least squares SEM path diagram",
             )
     return result

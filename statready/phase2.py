@@ -111,6 +111,139 @@ def _parallel_analysis(z: np.ndarray, iterations: int = 100, percentile: float =
     return observed, threshold, retained
 
 
+def _mardia_and_covariance_diagnostics(
+    z: pd.DataFrame, sample_cov: np.ndarray, n_params: int, alpha: float = 0.05
+) -> pd.DataFrame:
+    n, p = z.shape
+    values = z.to_numpy(dtype=float)
+    centered = values - values.mean(axis=0)
+    covariance = np.cov(centered, rowvar=False, ddof=1)
+    inverse = np.linalg.pinv(covariance)
+    # Mardia skewness is O(n^2); cap the screening matrix for large datasets.
+    if n > 1000:
+        rng = np.random.default_rng(42)
+        centered_screen = centered[rng.choice(n, 1000, replace=False)]
+        n_screen = len(centered_screen)
+    else:
+        centered_screen = centered
+        n_screen = n
+    cross = centered_screen @ inverse @ centered_screen.T
+    b1p = float(np.mean(cross ** 3))
+    skew_df = int(p * (p + 1) * (p + 2) / 6)
+    skew_chi = n_screen * b1p / 6
+    skew_p = float(stats.chi2.sf(skew_chi, skew_df)) if skew_df > 0 else np.nan
+    mahalanobis = np.sum((centered @ inverse) * centered, axis=1)
+    b2p = float(np.mean(mahalanobis ** 2))
+    expected = p * (p + 2)
+    kurtosis_z = (b2p - expected) / math.sqrt(max(8 * p * (p + 2) / max(n, 1), 1e-12))
+    kurtosis_p = float(2 * stats.norm.sf(abs(kurtosis_z)))
+    eigenvalues = np.linalg.eigvalsh(sample_cov)
+    minimum_eigen = float(np.min(eigenvalues))
+    condition_number = float(np.max(eigenvalues) / max(minimum_eigen, 1e-12))
+    skewness = z.skew().abs().max()
+    excess_kurtosis = z.kurt().abs().max()
+    ratio = n / max(n_params, 1)
+    rows = [
+        {
+            "diagnostic": "Multivariate normality", "test": "Mardia skewness", "statistic": b1p, "p_value": skew_p,
+            "status": "Satisfied" if skew_p >= alpha else "Material concern",
+            "interpretation": f"Mardia skewness screening used {n_screen} observation(s).",
+            "recommended_response": "When non-normality is material, consider DWLS for ordinal indicators, bootstrap inference, robust specialist-software confirmation, or a defensible transformation.",
+        },
+        {
+            "diagnostic": "Multivariate normality", "test": "Mardia kurtosis z", "statistic": kurtosis_z, "p_value": kurtosis_p,
+            "status": "Satisfied" if kurtosis_p >= alpha else "Material concern",
+            "interpretation": f"Mardia kurtosis coefficient={b2p:.3f}; normal-theory expectation={expected:.3f}.",
+            "recommended_response": "Use an estimator and inference procedure appropriate to the indicator scale and distribution; do not transform indicators solely to improve fit.",
+        },
+        {
+            "diagnostic": "Univariate indicator distribution", "test": "Maximum absolute skewness and excess kurtosis", "statistic": float(max(skewness, excess_kurtosis)), "p_value": np.nan,
+            "status": "Satisfied" if skewness <= 2 and excess_kurtosis <= 7 else "Minor concern" if skewness <= 3 and excess_kurtosis <= 10 else "Material concern",
+            "interpretation": f"Maximum |skewness|={float(skewness):.3f}; maximum |excess kurtosis|={float(excess_kurtosis):.3f}.",
+            "recommended_response": "Inspect item distributions, coding and floor or ceiling effects. Match estimator choice to scale and distribution.",
+        },
+        {
+            "diagnostic": "Observed covariance matrix", "test": "Minimum eigenvalue", "statistic": minimum_eigen, "p_value": np.nan,
+            "status": "Satisfied" if minimum_eigen > 1e-6 else "Material concern",
+            "interpretation": f"Covariance condition number={condition_number:.3f}.",
+            "recommended_response": "Check duplicated or nearly identical indicators, extreme collinearity and insufficient variation when the covariance matrix is nearly singular.",
+        },
+        {
+            "diagnostic": "Model information support", "test": "Observations per free parameter screening", "statistic": ratio, "p_value": np.nan,
+            "status": "Satisfied" if ratio >= 10 else "Minor concern" if ratio >= 5 else "Material concern",
+            "interpretation": f"The model has approximately {ratio:.2f} observations per free parameter. This is a screening rule, not a universal sample-size requirement.",
+            "recommended_response": "Use power, model complexity, indicator quality and convergence jointly. Confirm complex or weakly supported models independently.",
+        },
+    ]
+    return pd.DataFrame(rows)
+
+
+def _htmt_table(data: pd.DataFrame, construct_map: dict[str, list[str]]) -> pd.DataFrame:
+    items = [item for block in construct_map.values() for item in block]
+    corr = data[items].corr().abs()
+    constructs = list(construct_map)
+    rows = []
+    for index, first in enumerate(constructs):
+        first_items = construct_map[first]
+        mono_first = [corr.loc[a, b] for i, a in enumerate(first_items) for b in first_items[i + 1:]]
+        for second in constructs[index + 1:]:
+            second_items = construct_map[second]
+            mono_second = [corr.loc[a, b] for i, a in enumerate(second_items) for b in second_items[i + 1:]]
+            hetero = [corr.loc[a, b] for a in first_items for b in second_items]
+            denominator = math.sqrt(max(float(np.mean(mono_first)) if mono_first else np.nan, 0) * max(float(np.mean(mono_second)) if mono_second else np.nan, 0))
+            value = float(np.mean(hetero) / denominator) if denominator and np.isfinite(denominator) else np.nan
+            rows.append({"construct_1": first, "construct_2": second, "htmt": value})
+    return pd.DataFrame(rows)
+
+
+def _measurement_diagnostic_rows(
+    quality: pd.DataFrame, latent_correlation: np.ndarray, constructs: list[str], residual_table: pd.DataFrame, htmt: pd.DataFrame
+) -> pd.DataFrame:
+    minimum_cr = float(quality["composite_reliability"].min()) if not quality.empty else np.nan
+    minimum_ave = float(quality["average_variance_extracted"].min()) if not quality.empty else np.nan
+    violations = 0
+    if len(constructs) > 1 and not quality.empty:
+        sqrt_ave = dict(zip(quality["construct"], quality["sqrt_ave"]))
+        for i, first in enumerate(constructs):
+            for j, second in enumerate(constructs):
+                if i < j and abs(latent_correlation[i, j]) >= min(sqrt_ave.get(first, np.nan), sqrt_ave.get(second, np.nan)):
+                    violations += 1
+    maximum_htmt = float(htmt["htmt"].max()) if not htmt.empty else np.nan
+    maximum_residual = float(residual_table["absolute_residual"].max()) if not residual_table.empty else np.nan
+    return pd.DataFrame([
+        {
+            "diagnostic": "Construct reliability", "test": "Minimum composite reliability", "statistic": minimum_cr, "p_value": np.nan,
+            "status": "Cannot determine" if not np.isfinite(minimum_cr) else "Satisfied" if 0.70 <= minimum_cr <= 0.95 else "Minor concern" if 0.60 <= minimum_cr < 0.70 else "Material concern",
+            "interpretation": "Composite reliability should be interpreted with indicator breadth and potential redundancy.",
+            "recommended_response": "Review weak or redundant indicators against the construct definition; do not delete indicators automatically.",
+        },
+        {
+            "diagnostic": "Convergent validity", "test": "Minimum AVE", "statistic": minimum_ave, "p_value": np.nan,
+            "status": "Cannot determine" if not np.isfinite(minimum_ave) else "Satisfied" if minimum_ave >= 0.50 else "Material concern",
+            "interpretation": "AVE below 0.50 indicates that the construct captures less than half of its indicators' standardised variance on average.",
+            "recommended_response": "Review loading strength, item content and model specification. Retain theory and report any re-specification transparently.",
+        },
+        {
+            "diagnostic": "Discriminant validity", "test": "Fornell-Larcker violations", "statistic": float(violations), "p_value": np.nan,
+            "status": "Satisfied" if violations == 0 else "Material concern",
+            "interpretation": f"{violations} construct pair(s) failed the Fornell-Larcker comparison.",
+            "recommended_response": "Inspect construct definitions, cross-loadings and HTMT. Do not merge constructs solely to improve a criterion.",
+        },
+        {
+            "diagnostic": "Discriminant validity", "test": "Maximum HTMT", "statistic": maximum_htmt, "p_value": np.nan,
+            "status": "Cannot determine" if not np.isfinite(maximum_htmt) else "Satisfied" if maximum_htmt < 0.85 else "Minor concern" if maximum_htmt < 0.90 else "Material concern",
+            "interpretation": "High HTMT suggests limited empirical separation between constructs.",
+            "recommended_response": "Review conceptual overlap, wording similarity and method effects, then validate any revised model on independent data.",
+        },
+        {
+            "diagnostic": "Local covariance fit", "test": "Maximum absolute residual correlation", "statistic": maximum_residual, "p_value": np.nan,
+            "status": "Cannot determine" if not np.isfinite(maximum_residual) else "Satisfied" if maximum_residual < 0.10 else "Minor concern" if maximum_residual < 0.20 else "Material concern",
+            "interpretation": "Large residual correlations identify item pairs not well reproduced by the model.",
+            "recommended_response": "Investigate wording, cross-loadings and omitted structure. Correlate residuals only with a priori or clearly documented substantive justification.",
+        },
+    ])
+
+
 def _fit_index_diagnostics(fit: dict[str, float], alpha: float = 0.05) -> pd.DataFrame:
     rows = []
     rows.append({
@@ -146,6 +279,64 @@ def _fit_index_diagnostics(fit: dict[str, float], alpha: float = 0.05) -> pd.Dat
     return pd.DataFrame(rows)
 
 
+def _estimator_and_identification_diagnostics(
+    estimator: str,
+    fit: dict[str, float],
+    optimizer_success: bool,
+    data: pd.DataFrame,
+    sample_cov: np.ndarray,
+    n_params: int,
+    alpha: float = 0.05,
+) -> pd.DataFrame:
+    estimator_key = str(estimator).upper()
+    degrees_of_freedom = float(fit.get("degrees_of_freedom", np.nan))
+    eigenvalues = np.linalg.eigvalsh(sample_cov)
+    minimum_eigen = float(np.min(eigenvalues))
+    max_skew = float(data.skew().abs().max())
+    max_kurtosis = float(data.kurt().abs().max())
+    unique_counts = data.nunique(dropna=True)
+    ordinal_like = bool((unique_counts <= 7).all())
+    n_per_parameter = len(data) / max(n_params, 1)
+
+    if estimator_key == "ML":
+        suitability = "Satisfied" if max_skew <= 2 and max_kurtosis <= 7 else "Minor concern" if max_skew <= 3 and max_kurtosis <= 10 else "Material concern"
+        estimator_interpretation = "ML relies on approximately continuous indicators and normal-theory covariance inference."
+        estimator_response = "Use bootstrap or robust specialist-software confirmation when distributional concerns are material."
+    elif estimator_key == "DWLS":
+        suitability = "Satisfied" if ordinal_like else "Minor concern"
+        estimator_interpretation = "DWLS is commonly selected for ordered-categorical or materially non-normal indicators. The internal engine uses a diagonal covariance-residual weighting approximation."
+        estimator_response = "Confirm ordinal models with polychoric correlations and WLSMV or DWLS in specialist software before publication."
+    elif estimator_key == "GLS":
+        suitability = "Satisfied" if minimum_eigen > 1e-6 and n_per_parameter >= 10 else "Minor concern" if minimum_eigen > 0 else "Material concern"
+        estimator_interpretation = "GLS weights residuals by the inverse observed covariance structure and requires a stable covariance matrix."
+        estimator_response = "Use ULS, DWLS or specialist robust estimation when covariance inversion or sample support is weak."
+    else:
+        suitability = "Satisfied" if minimum_eigen > 1e-6 else "Material concern"
+        estimator_interpretation = "ULS minimises unweighted covariance residuals and is less dependent on multivariate normality, but normal-theory fit and standard-error inference are approximate here."
+        estimator_response = "Use ULS as a transparent sensitivity estimator and confirm inferential statistics independently."
+
+    return pd.DataFrame([
+        {
+            "diagnostic": "Model identification", "test": "Covariance degrees of freedom", "statistic": degrees_of_freedom, "p_value": np.nan,
+            "status": "Satisfied" if degrees_of_freedom > 0 else "Minor concern" if degrees_of_freedom == 0 else "Material concern",
+            "interpretation": "Positive degrees of freedom indicate an overidentified covariance model; zero indicates just identification; negative values indicate underidentification.",
+            "recommended_response": "Simplify unsupported parameters, add indicators or revise the prespecified structure when the model is not overidentified.",
+        },
+        {
+            "diagnostic": "Numerical convergence", "test": "L-BFGS-B optimiser success", "statistic": float(bool(optimizer_success)), "p_value": np.nan,
+            "status": "Satisfied" if optimizer_success else "Material concern",
+            "interpretation": "The numerical optimiser reported success." if optimizer_success else "The numerical optimiser did not report successful convergence.",
+            "recommended_response": "Inspect scaling, covariance singularity, model identification and starting values. Do not interpret a non-converged model.",
+        },
+        {
+            "diagnostic": "Estimator suitability", "test": estimator_key, "statistic": n_per_parameter, "p_value": np.nan,
+            "status": suitability,
+            "interpretation": estimator_interpretation,
+            "recommended_response": estimator_response,
+        },
+    ])
+
+
 def _ml_discrepancy(sample_cov: np.ndarray, model_cov: np.ndarray) -> float:
     p = sample_cov.shape[0]
     sign_s, logdet_s = np.linalg.slogdet(sample_cov)
@@ -158,6 +349,37 @@ def _ml_discrepancy(sample_cov: np.ndarray, model_cov: np.ndarray) -> float:
         return 1e12
     value = logdet_m + trace_term - logdet_s - p
     return float(value) if np.isfinite(value) else 1e12
+
+
+def _covariance_discrepancy(sample_cov: np.ndarray, model_cov: np.ndarray, estimator: str = "ML") -> float:
+    """Objective functions for the internal covariance engine.
+
+    ML uses the normal-theory likelihood discrepancy. ULS minimises raw covariance
+    residuals. GLS scales residuals by the inverse sample covariance. DWLS uses
+    diagonal asymptotic weights for unique covariance elements. These are transparent
+    internal approximations and are labelled as such in the report.
+    """
+    estimator_key = str(estimator).upper().replace(" ", "_")
+    if estimator_key in {"ML", "MAXIMUM_LIKELIHOOD"}:
+        return _ml_discrepancy(sample_cov, model_cov)
+    residual = np.asarray(sample_cov - model_cov, dtype=float)
+    if not np.all(np.isfinite(residual)):
+        return 1e12
+    if estimator_key in {"ULS", "UNWEIGHTED_LEAST_SQUARES"}:
+        lower = residual[np.tril_indices_from(residual)]
+        return float(np.sum(lower ** 2))
+    if estimator_key in {"GLS", "GENERALIZED_LEAST_SQUARES"}:
+        inverse = np.linalg.pinv(sample_cov)
+        value = np.trace((residual @ inverse) @ (residual @ inverse))
+        return float(value) if np.isfinite(value) else 1e12
+    if estimator_key in {"DWLS", "DIAGONALLY_WEIGHTED_LEAST_SQUARES"}:
+        indices = np.tril_indices_from(residual)
+        s_ij = sample_cov[indices]
+        s_ii = np.diag(sample_cov)[indices[0]]
+        s_jj = np.diag(sample_cov)[indices[1]]
+        variance = np.maximum(s_ii * s_jj + s_ij ** 2, 1e-8)
+        return float(np.sum((residual[indices] ** 2) / variance))
+    raise ValueError(f"Unsupported covariance estimator: {estimator}.")
 
 
 def _fit_indices(sample_cov: np.ndarray, model_cov: np.ndarray, n: int, n_params: int) -> dict[str, float]:
@@ -423,7 +645,7 @@ def _cfa_initial(spec: _MeasurementSpec, sample_corr: np.ndarray) -> np.ndarray:
     return np.concatenate([free_loadings, np.asarray(chol), theta])
 
 
-def _fit_cfa_covariance(data: pd.DataFrame, construct_map: dict[str, list[str]], random_state: int = 42) -> dict[str, object]:
+def _fit_cfa_covariance(data: pd.DataFrame, construct_map: dict[str, list[str]], random_state: int = 42, estimator: str = "ML") -> dict[str, object]:
     spec = _measurement_spec(construct_map)
     numeric = _complete_numeric(data, spec.items)
     z = pd.DataFrame(StandardScaler().fit_transform(numeric), columns=spec.items, index=numeric.index)
@@ -433,7 +655,7 @@ def _fit_cfa_covariance(data: pd.DataFrame, construct_map: dict[str, list[str]],
     def objective(params: np.ndarray) -> float:
         loadings, phi, theta = _cfa_unpack(params, spec)
         sigma = loadings @ phi @ loadings.T + np.diag(theta)
-        return _ml_discrepancy(sample_cov, sigma)
+        return _covariance_discrepancy(sample_cov, sigma, estimator)
 
     rng = np.random.default_rng(random_state)
     best = None
@@ -500,10 +722,21 @@ def confirmatory_factor_analysis(
     construct_map: dict[str, list[str]],
     alpha: float = 0.05,
     random_state: int = 42,
+    estimator: str = "ML",
 ) -> AnalysisResult:
-    fitted = _fit_cfa_covariance(df, construct_map, random_state=random_state)
+    fitted = _fit_cfa_covariance(df, construct_map, random_state=random_state, estimator=estimator)
     fit = fitted["fit"]
     diagnostics = _fit_index_diagnostics(fit, alpha)
+    htmt = _htmt_table(fitted["data"], construct_map)
+    latent_corr_matrix = fitted["correlation_table"].set_index("construct").to_numpy(dtype=float)
+    diagnostics = pd.concat([
+        diagnostics,
+        _mardia_and_covariance_diagnostics(fitted["data"], fitted["sample_cov"], len(fitted["optimizer"].x), alpha),
+        _measurement_diagnostic_rows(fitted["quality_table"], latent_corr_matrix, fitted["spec"].constructs, fitted["residual_table"], htmt),
+        _estimator_and_identification_diagnostics(
+            estimator, fit, bool(fitted["optimizer"].success), fitted["data"], fitted["sample_cov"], len(fitted["optimizer"].x), alpha,
+        ),
+    ], ignore_index=True)
     weak = fitted["loading_table"][fitted["loading_table"]["standardized_loading"].abs() < 0.50]
     if not weak.empty:
         diagnostics = pd.concat([diagnostics, pd.DataFrame([{
@@ -516,7 +749,15 @@ def confirmatory_factor_analysis(
             "recommended_response": "Review item wording and construct coverage. Remove an indicator only with theoretical and measurement justification, then disclose the re-specification.",
         }])], ignore_index=True)
 
-    fit_table = pd.DataFrame([{"n": len(fitted["data"]), "constructs": len(fitted["spec"].constructs), "items": len(fitted["spec"].items), **fit, "optimizer_success": bool(fitted["optimizer"].success)}])
+    inadmissible = int((fitted["loading_table"]["standardized_loading"].abs() > 1.0).sum())
+    diagnostics = pd.concat([diagnostics, pd.DataFrame([{
+        "diagnostic": "Admissible measurement solution", "test": "Absolute standardised loadings above one", "statistic": float(inadmissible), "p_value": np.nan,
+        "status": "Satisfied" if inadmissible == 0 else "Material concern",
+        "interpretation": f"{inadmissible} indicator(s) had an absolute standardised loading above one.",
+        "recommended_response": "Check collinearity, model identification and residual variances. Do not interpret an inadmissible solution as valid.",
+    }])], ignore_index=True)
+
+    fit_table = pd.DataFrame([{"n": len(fitted["data"]), "constructs": len(fitted["spec"].constructs), "items": len(fitted["spec"].items), **fit, "optimizer_success": bool(fitted["optimizer"].success), "estimator": estimator}])
     warnings = []
     if not fitted["optimizer"].success:
         warnings.append("The optimiser returned a caution message. Treat the estimates as provisional and inspect convergence and residuals.")
@@ -531,12 +772,13 @@ def confirmatory_factor_analysis(
             "CFA standardised loadings": fitted["loading_table"],
             "Latent factor correlations": fitted["correlation_table"],
             "Construct reliability and validity": fitted["quality_table"],
+            "HTMT discriminant validity": htmt,
             "Largest residual correlations": fitted["residual_table"].head(20),
             "Observed covariance matrix": pd.DataFrame(fitted["sample_cov"], index=fitted["spec"].items, columns=fitted["spec"].items).reset_index(names="item"),
             "Model-implied covariance matrix": pd.DataFrame(fitted["model_cov"], index=fitted["spec"].items, columns=fitted["spec"].items).reset_index(names="item"),
         },
         diagnostics=diagnostics,
-        metadata={"construct_map": construct_map, "n": len(fitted["data"]), "estimator": "Maximum-likelihood covariance fitting"},
+        metadata={"construct_map": construct_map, "n": len(fitted["data"]), "estimator": estimator},
         warnings=warnings,
         treatment_log=[AuditEntry(
             action="Estimated prespecified measurement model",
@@ -588,6 +830,7 @@ def structural_equation_model(
     paths: list[tuple[str, str]],
     alpha: float = 0.05,
     random_state: int = 42,
+    estimator: str = "ML",
 ) -> AnalysisResult:
     spec = _measurement_spec(construct_map)
     _validate_paths(spec.constructs, paths)
@@ -655,7 +898,7 @@ def structural_equation_model(
         *_, sigma = unpack(params)
         if sigma is None:
             return 1e12
-        return _ml_discrepancy(sample_cov, sigma)
+        return _covariance_discrepancy(sample_cov, sigma, estimator)
 
     rng = np.random.default_rng(random_state)
     best = None
@@ -697,13 +940,88 @@ def structural_equation_model(
         standardized = loadings[row, factor_i] * latent_sd[factor_i] / math.sqrt(max(model_diag[row], 1e-12))
         loading_rows.append({"construct": spec.constructs[factor_i], "item": item, "loading": loadings[row, factor_i], "standardized_loading": standardized, "residual_variance": theta[row]})
     loading_table = pd.DataFrame(loading_rows)
+    latent_sd_matrix = np.sqrt(np.diag(latent_cov))
+    latent_correlation = latent_cov / np.outer(latent_sd_matrix, latent_sd_matrix)
     latent_cov_table = pd.DataFrame(latent_cov, index=spec.constructs, columns=spec.constructs).reset_index(names="construct")
-    fit_table = pd.DataFrame([{"n": len(z), "constructs": q, "items": p, "paths": len(paths), **fit, "optimizer_success": bool(best.success)}])
-    diagnostics = _fit_index_diagnostics(fit, alpha)
+    latent_corr_table = pd.DataFrame(latent_correlation, index=spec.constructs, columns=spec.constructs).reset_index(names="construct")
+    quality_rows = []
+    for construct in spec.constructs:
+        subset = loading_table[loading_table["construct"] == construct]
+        lambdas = subset["standardized_loading"].to_numpy(dtype=float)
+        residuals = np.maximum(1.0 - lambdas ** 2, 0.0)
+        cr = (lambdas.sum() ** 2) / max((lambdas.sum() ** 2) + residuals.sum(), 1e-12)
+        ave = float(np.mean(lambdas ** 2))
+        quality_rows.append({"construct": construct, "composite_reliability": cr, "average_variance_extracted": ave, "sqrt_ave": math.sqrt(max(ave, 0))})
+    quality_table = pd.DataFrame(quality_rows)
+    sample_sd = np.sqrt(np.diag(sample_cov))
+    model_sd = np.sqrt(np.diag(sigma))
+    residual_corr = sample_cov / np.outer(sample_sd, sample_sd) - sigma / np.outer(model_sd, model_sd)
+    residual_rows = []
+    for i in range(p):
+        for j in range(i + 1, p):
+            residual_rows.append({"item_1": spec.items[i], "item_2": spec.items[j], "residual_correlation": residual_corr[i, j], "absolute_residual": abs(residual_corr[i, j])})
+    residual_table = pd.DataFrame(residual_rows).sort_values("absolute_residual", ascending=False).reset_index(drop=True)
+    htmt = _htmt_table(z, construct_map)
+    r_squared_rows = []
+    for construct_index in endo_indices:
+        construct = spec.constructs[construct_index]
+        total_variance = float(latent_cov[construct_index, construct_index])
+        disturbance_variance = float(psi[construct_index, construct_index])
+        r_squared_rows.append({
+            "endogenous_construct": construct,
+            "r_squared": float(np.clip(1.0 - disturbance_variance / max(total_variance, 1e-12), 0.0, 1.0)),
+            "disturbance_variance": disturbance_variance,
+            "total_latent_variance": total_variance,
+        })
+    structural_r_squared = pd.DataFrame(r_squared_rows)
+
+    latent_vif_rows = []
+    for outcome in spec.constructs:
+        predictors_for_outcome = [predictor for predictor, target in paths if target == outcome]
+        if len(predictors_for_outcome) < 2:
+            for predictor in predictors_for_outcome:
+                latent_vif_rows.append({"outcome": outcome, "predictor": predictor, "vif": 1.0, "status": "Satisfied"})
+            continue
+        indices = [index_map[name] for name in predictors_for_outcome]
+        predictor_corr = latent_correlation[np.ix_(indices, indices)]
+        inverse_corr = np.linalg.pinv(predictor_corr)
+        for predictor, vif_value in zip(predictors_for_outcome, np.diag(inverse_corr)):
+            latent_vif_rows.append({
+                "outcome": outcome, "predictor": predictor, "vif": float(vif_value),
+                "status": "Satisfied" if vif_value < 5 else "Minor concern" if vif_value < 10 else "Material concern",
+            })
+    latent_vif_table = pd.DataFrame(latent_vif_rows)
+    max_latent_vif = float(latent_vif_table["vif"].max()) if not latent_vif_table.empty else np.nan
+    inadmissible = int((loading_table["standardized_loading"].abs() > 1.0).sum())
+    fit_table = pd.DataFrame([{"n": len(z), "constructs": q, "items": p, "paths": len(paths), "estimator": estimator, **fit, "optimizer_success": bool(best.success)}])
+    diagnostics = pd.concat([
+        _fit_index_diagnostics(fit, alpha),
+        _mardia_and_covariance_diagnostics(z, sample_cov, len(best.x), alpha),
+        _measurement_diagnostic_rows(quality_table, latent_correlation, spec.constructs, residual_table, htmt),
+        _estimator_and_identification_diagnostics(
+            estimator, fit, bool(best.success), z, sample_cov, len(best.x), alpha,
+        ),
+    ], ignore_index=True)
+    diagnostics = pd.concat([diagnostics, pd.DataFrame([
+        {
+            "diagnostic": "Structural predictor collinearity", "test": "Maximum latent predictor VIF", "statistic": max_latent_vif, "p_value": np.nan,
+            "status": "Cannot determine" if not np.isfinite(max_latent_vif) else "Satisfied" if max_latent_vif < 5 else "Minor concern" if max_latent_vif < 10 else "Material concern",
+            "interpretation": "High latent predictor VIF makes individual structural paths unstable.",
+            "recommended_response": "Review construct overlap and report alternative theoretically defensible specifications rather than deleting paths to obtain significance.",
+        },
+        {
+            "diagnostic": "Admissible measurement solution", "test": "Absolute standardised loadings above one", "statistic": float(inadmissible), "p_value": np.nan,
+            "status": "Satisfied" if inadmissible == 0 else "Material concern",
+            "interpretation": f"{inadmissible} indicator(s) had an absolute standardised loading above one.",
+            "recommended_response": "Check collinearity, model identification and disturbance or residual variances. Do not interpret an inadmissible solution as valid.",
+        },
+    ])], ignore_index=True)
 
     warnings = [
         "SEM standard errors and p-values are numerical approximations from the optimisation Hessian. Confirm important results in a specialist SEM package before publication."
     ]
+    if str(estimator).upper() != "ML":
+        warnings.append("CFI, TLI, RMSEA and chi-square are descriptive approximations under the selected non-ML objective in this internal engine.")
     if not best.success:
         warnings.append("The optimiser returned a caution message. Treat the model as provisional.")
 
@@ -716,13 +1034,19 @@ def structural_equation_model(
         tables={
             "SEM fit indices": fit_table,
             "Structural path estimates": path_table,
+            "Endogenous construct R squared": structural_r_squared,
+            "Latent structural VIF": latent_vif_table,
             "SEM standardised loadings": loading_table,
+            "Construct reliability and convergent validity": quality_table,
+            "HTMT discriminant validity": htmt,
             "Latent covariance matrix": latent_cov_table,
+            "Latent correlation matrix": latent_corr_table,
+            "Largest residual correlations": residual_table.head(20),
             "Observed covariance matrix": pd.DataFrame(sample_cov, index=spec.items, columns=spec.items).reset_index(names="item"),
             "Model-implied covariance matrix": pd.DataFrame(sigma, index=spec.items, columns=spec.items).reset_index(names="item"),
         },
         diagnostics=diagnostics,
-        metadata={"construct_map": construct_map, "paths": paths, "n": len(z), "estimator": "Maximum-likelihood covariance fitting"},
+        metadata={"construct_map": construct_map, "paths": paths, "n": len(z), "estimator": estimator},
         warnings=warnings,
         treatment_log=[AuditEntry(
             action="Estimated prespecified latent-variable structural model",

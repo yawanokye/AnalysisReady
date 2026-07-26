@@ -118,6 +118,36 @@ CURATED_REFERENCES = [
         "doi": "",
         "supports": "Simple slopes, Johnson–Neyman analysis, multiple mediation and moderated mediation.",
     },
+    {
+        "topic": "pls_sem",
+        "citation": "Hair, J. F., Hult, G. T. M., Ringle, C. M., & Sarstedt, M. (2022). A Primer on Partial Least Squares Structural Equation Modeling (PLS-SEM) (3rd ed.). Sage.",
+        "doi": "",
+        "supports": "PLS-SEM model specification, estimation, measurement assessment, structural assessment and reporting.",
+    },
+    {
+        "topic": "htmt",
+        "citation": "Henseler, J., Ringle, C. M., & Sarstedt, M. (2015). A new criterion for assessing discriminant validity in variance-based structural equation modeling. Journal of the Academy of Marketing Science, 43, 115–135.",
+        "doi": "10.1007/s11747-014-0403-8",
+        "supports": "HTMT assessment of discriminant validity in PLS-SEM.",
+    },
+    {
+        "topic": "multilevel",
+        "citation": "Snijders, T. A. B., & Bosker, R. J. (2012). Multilevel Analysis: An Introduction to Basic and Advanced Multilevel Modeling (2nd ed.). Sage.",
+        "doi": "",
+        "supports": "Multilevel model specification, centring, contextual effects and variance partitioning.",
+    },
+    {
+        "topic": "multilevel_r2",
+        "citation": "Nakagawa, S., & Schielzeth, H. (2013). A general and simple method for obtaining R2 from generalized linear mixed-effects models. Methods in Ecology and Evolution, 4(2), 133–142.",
+        "doi": "10.1111/j.2041-210x.2012.00261.x",
+        "supports": "Marginal and conditional R-squared for mixed-effects models.",
+    },
+    {
+        "topic": "gee",
+        "citation": "Liang, K.-Y., & Zeger, S. L. (1986). Longitudinal data analysis using generalized linear models. Biometrika, 73(1), 13–22.",
+        "doi": "10.1093/biomet/73.1.13",
+        "supports": "Population-average estimation with generalized estimating equations and robust covariance.",
+    },
 ]
 
 
@@ -139,12 +169,14 @@ def references_for_method(method: str, diagnostics: pd.DataFrame | None = None) 
         topics.update({"conditional_process", "bootstrap"})
     if "exploratory factor" in method_lower:
         topics.update({"exploratory_factor_analysis", "parallel_analysis"})
-    if "confirmatory factor" in method_lower or "structural equation" in method_lower:
+    if "partial least squares" in method_lower:
+        topics.update({"pls_sem", "htmt", "bootstrap"})
+    elif "confirmatory factor" in method_lower or "structural equation" in method_lower:
         topics.update({"cfa_sem", "sem_fit"})
     if "repeated-measures" in method_lower:
         topics.add("repeated_measures")
-    if "mixed-effects" in method_lower:
-        topics.add("mixed_effects")
+    if "mixed-effects" in method_lower or "multilevel" in method_lower:
+        topics.update({"mixed_effects", "multilevel", "multilevel_r2", "gee"})
     if "fixed-effects" in method_lower or "random-effects" in method_lower or "panel" in method_lower:
         topics.add("panel_data")
     if "regression" in method_lower or "ols" in method_lower:

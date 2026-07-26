@@ -18,8 +18,9 @@ METHOD_LABELS = {
     "efa": "Exploratory factor analysis",
     "cfa": "Confirmatory factor analysis",
     "sem": "Covariance-based structural equation model",
+    "pls_sem": "Partial least squares structural equation model (PLS-SEM)",
     "repeated_measures": "Repeated-measures ANOVA",
-    "mixed_effects": "Linear mixed-effects model",
+    "multilevel": "Multilevel mixed model or robust GEE",
     "panel": "Panel-data model selection",
     "advanced_moderation": "Advanced moderation with simple slopes",
     "parallel_mediation": "Parallel multiple mediation",
@@ -36,7 +37,10 @@ def recommend_method(
 ) -> dict[str, str]:
     text = f"{objective} {hypothesis}".lower()
 
-    if re.search(r"structural equation|\bsem\b|latent path|latent variable model", text):
+    if re.search(r"pls.?sem|partial least squares|composite structural", text):
+        key = "pls_sem"
+        reason = "The wording specifies a composite-based PLS structural equation model with predictive and latent-variable assessment."
+    elif re.search(r"structural equation|\bsem\b|latent path|latent variable model", text):
         key = "sem"
         reason = "The wording specifies a latent-variable structural model with linked measurement and structural relationships."
     elif re.search(r"confirmatory factor|\bcfa\b|measurement model|construct validity", text):
@@ -49,7 +53,7 @@ def recommend_method(
         key = "panel"
         reason = "The data appear to contain repeated entity observations across time."
     elif re.search(r"mixed effects|multilevel|hierarchical|nested|clustered observations|random intercept|random slope", text):
-        key = "mixed_effects"
+        key = "multilevel"
         reason = "The objective involves observations nested within clusters or repeated within units."
     elif re.search(r"repeated measures|within-subject|multiple time points|three time points", text):
         key = "repeated_measures"
