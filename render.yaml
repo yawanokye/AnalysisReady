@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: statready-phase1
+    runtime: docker
+    plan: starter
+    autoDeploy: false
+    healthCheckPath: /_stcore/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.4
