@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+from statready.agent import build_guided_review
 from statready.dispatch import run_analysis
 from statready.io import list_excel_sheets, load_tabular_file
 from statready.literature import references_for_method
@@ -40,6 +41,8 @@ def init_state() -> None:
         "recommended_method_key": "descriptive",
         "study": {},
         "source_name": "",
+        "agent_review": None,
+        "experience_mode": "AI Guided",
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -84,6 +87,7 @@ def load_uploaded_data(uploaded_file, selected_sheet=None) -> None:
     st.session_state.source_name = uploaded_file.name
     st.session_state.audit_entries = []
     st.session_state.framework = create_framework(dataframe)
+    st.session_state.agent_review = None
     reset_analysis_result()
     add_audit(AuditEntry(
         action="Imported dataset",
@@ -113,6 +117,7 @@ def analysis_plan_frame(method_label: str, config: dict) -> pd.DataFrame:
     fields = {
         "Objective": study.get("objective", ""),
         "Hypothesis": study.get("hypothesis", ""),
+        "Guidance level": study.get("guidance_level", ""),
         "Conceptual framework": study.get("framework_notes", ""),
         "Framework role mapping": role_text,
         "Method": method_label,
@@ -132,6 +137,8 @@ def analysis_plan_frame(method_label: str, config: dict) -> pd.DataFrame:
             for relation in (config.get("structural_relations") or [])
         ),
         "Structural paths estimated": "; ".join(f"{predictor} -> {outcome}" for predictor, outcome in (config.get("paths") or [])),
+        "Path diagram layout": (config.get("diagram_settings") or {}).get("layout", ""),
+        "Path diagram display": ", ".join(key.replace("show_", "").replace("_", " ") for key, value in (config.get("diagram_settings") or {}).items() if key.startswith("show_") and value),
         "Estimator": config.get("estimator", ""),
         "Bootstrap resamples": config.get("bootstrap_samples", ""),
         "PLS weighting scheme": config.get("weighting_scheme", ""),
@@ -324,6 +331,78 @@ def render_structural_relation_builder(
     return relations, paths, moderations, errors[0] if errors else None
 
 
+def render_diagram_settings(method_key: str, constructs: list[str]) -> dict:
+    """User-controlled path and measurement diagram settings."""
+    saved = st.session_state.study.get(f"{method_key}_diagram_settings", {})
+    layout_options = [
+        "Left to right",
+        "Top to bottom",
+        "Bottom to top",
+        "Radial",
+        "Hierarchical",
+        "Measurement first",
+        "Structural first",
+        "Compact publication",
+    ]
+    with st.expander("Path diagram settings", expanded=False):
+        layout = st.selectbox(
+            "Diagram orientation and layout",
+            layout_options,
+            index=layout_options.index(saved.get("layout", "Left to right")) if saved.get("layout", "Left to right") in layout_options else 0,
+            key=f"{method_key}_diagram_layout",
+        )
+        arrow_style = st.selectbox(
+            "Structural arrow style", ["Straight", "Curved"],
+            index=1 if saved.get("arrow_style") == "Curved" else 0,
+            key=f"{method_key}_diagram_arrows",
+        )
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            show_indicators = st.checkbox("Show observed indicators", value=bool(saved.get("show_indicators", True)), key=f"{method_key}_show_indicators")
+            show_loadings = st.checkbox("Show factor loadings", value=bool(saved.get("show_loadings", True)), key=f"{method_key}_show_loadings")
+            show_indicator_names = st.checkbox("Show indicator names", value=bool(saved.get("show_indicator_names", True)), key=f"{method_key}_show_indicator_names")
+        with c2:
+            show_coefficients = st.checkbox("Show path coefficients", value=bool(saved.get("show_coefficients", True)), key=f"{method_key}_show_coefficients")
+            show_p_values = st.checkbox("Show path p-values", value=bool(saved.get("show_p_values", True)), key=f"{method_key}_show_p_values")
+            show_fit = st.checkbox("Show model-fit indices", value=bool(saved.get("show_fit", True)), key=f"{method_key}_show_fit")
+        with c3:
+            significance_colours = st.checkbox("Highlight path significance", value=bool(saved.get("significance_colours", True)), key=f"{method_key}_significance_colours")
+            monochrome = st.checkbox("Journal monochrome", value=bool(saved.get("monochrome", False)), key=f"{method_key}_monochrome")
+            transparent = st.checkbox("Transparent background", value=bool(saved.get("transparent", False)), key=f"{method_key}_transparent")
+        resolution = st.selectbox(
+            "Export resolution", ["Standard", "High resolution"],
+            index=1 if saved.get("resolution") == "High resolution" else 0,
+            key=f"{method_key}_diagram_resolution",
+        )
+        custom_order_text = st.text_input(
+            "Optional construct order",
+            value=", ".join(saved.get("construct_order", [])),
+            placeholder=", ".join(constructs),
+            help="Enter construct names separated by commas. Unlisted constructs are appended automatically.",
+            key=f"{method_key}_diagram_order",
+        )
+    requested_order = [value.strip() for value in custom_order_text.split(",") if value.strip()]
+    construct_order = [value for value in requested_order if value in constructs]
+    construct_order += [value for value in constructs if value not in construct_order]
+    settings = {
+        "layout": layout,
+        "arrow_style": arrow_style,
+        "show_indicators": show_indicators,
+        "show_loadings": show_loadings,
+        "show_indicator_names": show_indicator_names,
+        "show_coefficients": show_coefficients,
+        "show_p_values": show_p_values,
+        "show_fit": show_fit,
+        "significance_colours": significance_colours,
+        "monochrome": monochrome,
+        "transparent": transparent,
+        "resolution": resolution,
+        "construct_order": construct_order,
+    }
+    st.session_state.study[f"{method_key}_diagram_settings"] = settings
+    return settings
+
+
 def render_method_configuration(method_key: str, columns: list[str], numeric_columns: list[str]) -> dict:
     config: dict = {"alpha": st.number_input("Significance level", min_value=0.001, max_value=0.20, value=float(st.session_state.study.get("alpha", 0.05)), step=0.01, format="%.3f")}
     roles = framework_defaults()
@@ -401,6 +480,7 @@ def render_method_configuration(method_key: str, columns: list[str], numeric_col
             config["max_iter"] = int(st.number_input("Maximum PLS iterations", min_value=50, max_value=2000, value=300, step=50, key="pls_iterations"))
             config["tolerance"] = float(st.selectbox("Convergence tolerance", [1e-5, 1e-6, 1e-7, 1e-8], index=2, key="pls_tolerance"))
         config["random_state"] = int(st.number_input("Random seed", min_value=0, max_value=999999, value=42, step=1, key=f"{method_key}_seed"))
+        config["diagram_settings"] = render_diagram_settings(method_key, list(config.get("construct_map", {})))
     elif method_key == "repeated_measures":
         config["measurements"] = st.multiselect("Repeated measurement columns", numeric_columns)
         config["subject_id"] = variable_selector("Subject identifier (optional)", columns, "rm_subject", allow_none=True, default=next((v for v in roles["Identifier"] if v in columns), None))
@@ -538,11 +618,16 @@ def validate_config(method_key: str, config: dict) -> str | None:
 init_state()
 
 st.title("StatReady AI")
-st.caption("Phase 2.2: structured CB-SEM and PLS-SEM, multilevel mixed models and robust GEE, diagnostics and reproducible reporting")
+st.caption("Phase 2.3: flexible path diagrams, AI Guided Mode, structured CB-SEM and PLS-SEM, multilevel models, diagnostics and reproducible reporting")
 st.info("The app never changes data merely to obtain significance. It preserves the original dataset, records every treatment, uses robust or alternative methods where justified, and keeps sensitivity results visible.")
+st.session_state.experience_mode = st.segmented_control(
+    "Working mode", ["AI Guided", "Standard"],
+    default=st.session_state.get("experience_mode", "AI Guided"),
+    help="AI Guided Mode provides reviewable recommendations and readiness checks. It does not make irreversible decisions or alter data without confirmation.",
+) or "AI Guided"
 
-study_tab, data_tab, framework_tab, analysis_tab, results_tab = st.tabs([
-    "1. Study design", "2. Data preparation", "3. Conceptual framework", "4. Run analysis", "5. Results and exports"
+study_tab, data_tab, framework_tab, agent_tab, analysis_tab, results_tab = st.tabs([
+    "1. Study design", "2. Data preparation", "3. Conceptual framework", "4. AI research agent", "5. Run analysis", "6. Results and exports"
 ])
 
 with study_tab:
@@ -573,6 +658,7 @@ with study_tab:
         recommendation = recommend_method(objective, hypothesis, outcome_type, int(group_count) or None, paired)
         st.session_state.recommended_method_key = recommendation["method_key"]
         st.session_state.study["recommendation_reason"] = recommendation["reason"]
+        st.session_state["analysis_method_label"] = METHOD_LABELS[recommendation["method_key"]]
 
     recommended_key = st.session_state.recommended_method_key
     st.success(f"Recommended starting method: **{METHOD_LABELS[recommended_key]}**")
@@ -718,6 +804,102 @@ with framework_tab:
         st.session_state.study["framework_notes"] = framework_notes
         st.caption("Image extraction can be added later. Phase 2 uses confirmed structured roles and explicit construct specifications to avoid incorrect automatic interpretation.")
 
+with agent_tab:
+    st.subheader("AI Guided Mode for research and statistical decisions")
+    st.write("The guided agent combines study wording, dataset structure, variable roles and statistical decision rules. Every recommendation remains reviewable. It will not delete observations, transform variables, change estimators or run a final model without your approval.")
+    guidance_level = st.selectbox(
+        "Guidance level", ["Novice", "Assisted", "Expert co-pilot"],
+        index=["Novice", "Assisted", "Expert co-pilot"].index(st.session_state.study.get("guidance_level", "Novice")),
+    )
+    st.session_state.study["guidance_level"] = guidance_level
+
+    if st.button("Review my study and dataset", type="primary", key="agent_review_button"):
+        st.session_state.agent_review = build_guided_review(
+            st.session_state.study, st.session_state.analysis_df, st.session_state.framework
+        )
+
+    review = st.session_state.get("agent_review")
+    if review is None:
+        st.info("Complete as much of the study design as possible, upload the dataset, then run the guided review.")
+    else:
+        st.markdown("### Recommended starting method")
+        st.success(f"**{review.method_label}**")
+        st.write(review.reason)
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Use this method in analysis setup", key="agent_use_method"):
+                st.session_state.recommended_method_key = review.method_key
+                st.session_state.study["recommendation_reason"] = review.reason
+                st.session_state["analysis_method_label"] = review.method_label
+                st.success("The method has been selected as the starting method. Review its configuration before running it.")
+        with c2:
+            if st.button("Refresh review", key="agent_refresh"):
+                st.session_state.agent_review = build_guided_review(
+                    st.session_state.study, st.session_state.analysis_df, st.session_state.framework
+                )
+                st.rerun()
+
+        st.markdown("### Analysis readiness")
+        st.dataframe(review.readiness, use_container_width=True, hide_index=True)
+        outstanding = review.readiness[review.readiness["status"] != "Ready"]
+        if outstanding.empty:
+            st.success("The core study and data inputs are ready for method-specific configuration.")
+        else:
+            st.warning(f"{len(outstanding)} readiness item(s) still need attention.")
+
+        st.markdown("### Dataset findings")
+        st.dataframe(review.data_findings, use_container_width=True, hide_index=True)
+
+        if not review.role_suggestions.empty:
+            st.markdown("### Suggested variable roles")
+            st.caption("These are conservative suggestions, not final classifications. Review them against the objective and conceptual framework.")
+            st.dataframe(review.role_suggestions, use_container_width=True, hide_index=True)
+            apply_confidence = st.multiselect(
+                "Apply suggestions with confidence", ["High", "Medium", "Low"], default=["High", "Medium"],
+                key="agent_role_confidence",
+            )
+            if st.button("Apply selected role suggestions", key="agent_apply_roles"):
+                frame = st.session_state.framework.copy()
+                suggestions = review.role_suggestions[
+                    review.role_suggestions["confidence"].isin(apply_confidence)
+                    & (review.role_suggestions["suggested_role"] != "Unassigned")
+                ]
+                role_map = dict(zip(suggestions["variable"], suggestions["suggested_role"]))
+                measurement_map = dict(zip(suggestions["variable"], suggestions["measurement"]))
+                frame["role"] = [role_map.get(variable, role) for variable, role in zip(frame["variable"], frame["role"])]
+                frame["measurement"] = [measurement_map.get(variable, measurement) for variable, measurement in zip(frame["variable"], frame["measurement"])]
+                st.session_state.framework = frame
+                st.session_state.agent_review = build_guided_review(
+                    st.session_state.study, st.session_state.analysis_df, st.session_state.framework
+                )
+                st.success(f"Applied {len(role_map)} reviewable suggestion(s). Open the conceptual-framework tab to confirm or edit them.")
+
+        if review.construct_suggestions:
+            st.markdown("### Suggested construct blocks")
+            construct_frame = pd.DataFrame([{
+                "construct": item["name"],
+                "suggested_items": ", ".join(item["items"]),
+                "measurement": item["mode"],
+                "confidence": item["confidence"],
+                "rationale": item["rationale"],
+            } for item in review.construct_suggestions])
+            st.dataframe(construct_frame, use_container_width=True, hide_index=True)
+            target_method = st.selectbox("Load suggestions into", ["PLS-SEM", "Covariance-based SEM", "CFA"], key="agent_construct_target")
+            if st.button("Load construct suggestions for confirmation", key="agent_apply_constructs"):
+                target_key = {"PLS-SEM": "pls_sem", "Covariance-based SEM": "sem", "CFA": "cfa"}[target_method]
+                definitions = []
+                for suggestion in review.construct_suggestions:
+                    mode = suggestion["mode"] if target_key == "pls_sem" else "Reflective common-factor"
+                    definitions.append({"name": suggestion["name"], "mode": mode, "items": suggestion["items"]})
+                st.session_state.study[f"{target_key}_construct_definitions"] = definitions
+                st.session_state.recommended_method_key = target_key
+                st.session_state["analysis_method_label"] = METHOD_LABELS[target_key]
+                st.success("Suggestions were loaded into the construct builder. Confirm names, indicators, measurement modes and structural relationships before analysis.")
+
+        st.markdown("### Guided next actions")
+        for number, action in enumerate(review.next_actions, start=1):
+            st.write(f"{number}. {action}")
+
 with analysis_tab:
     st.subheader("Configure and run analysis")
     if st.session_state.analysis_df is None:
@@ -729,7 +911,9 @@ with analysis_tab:
         default_label = METHOD_LABELS.get(st.session_state.recommended_method_key, METHOD_LABELS["descriptive"])
         labels = list(METHOD_OPTIONS.keys())
         default_index = labels.index(default_label) if default_label in labels else 0
-        selected_label = st.selectbox("Statistical method", labels, index=default_index)
+        if st.session_state.get("analysis_method_label") not in labels:
+            st.session_state["analysis_method_label"] = default_label
+        selected_label = st.selectbox("Statistical method", labels, index=default_index, key="analysis_method_label")
         selected_key = METHOD_OPTIONS[selected_label]
         config = render_method_configuration(selected_key, columns, numeric_columns)
         config["alpha"] = float(config.get("alpha", st.session_state.study.get("alpha", 0.05)))
@@ -859,4 +1043,4 @@ with results_tab:
             st.code(result.reproducible_code, language="python")
 
 st.divider()
-st.caption("StatReady AI Phase 2.2 | Original data preserved | CB-SEM, PLS-SEM, mixed models and robust GEE audited | Alternatives documented")
+st.caption("StatReady AI Phase 2.3 | Flexible path diagrams | AI Guided Mode | Original data preserved | Alternatives documented")

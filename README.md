@@ -1,4 +1,4 @@
-# StatReady AI, Phase 2.2
+# StatReady AI, Phase 2.3
 
 StatReady AI is a transparent statistical analysis and reporting application for CSV and Excel data. It links research objectives, hypotheses, conceptual-framework roles and dataset structure to statistical methods, diagnostics, defensible responses and reproducible exports.
 
@@ -17,7 +17,7 @@ StatReady AI is a transparent statistical analysis and reporting application for
 - Complete treatment and analysis audit trail
 - DOCX, Excel, CSV, code and reproducibility ZIP exports
 
-## Phase 2.2 additions
+## Phase 2.2 foundation
 
 ### Structured construct measurement builder
 
@@ -41,6 +41,48 @@ Structural relationships are selected from entered construct names.
 - **Moderator:** predictor, moderator and outcome
 
 Mediation specifications generate direct, indirect and total-effect tables. PLS-SEM estimates moderation through a two-stage latent-score interaction. The internal covariance-based SEM engine records latent moderation requests but directs them to PLS-SEM or the dedicated moderation module rather than silently omitting the interaction.
+
+## Phase 2.3 additions
+
+### AI Guided Mode
+
+The new AI research agent helps novice and experienced users move from a study idea to a defensible analysis specification. The agent is transparent and confirmation-based. It does not alter data, delete observations, change estimators or run a final model without user approval.
+
+The guided workflow provides:
+
+- readiness checks for the objective, hypothesis, dataset, outcome type, conceptual framework and variable roles
+- conservative variable-role suggestions with confidence levels and explanations
+- method recommendations from study wording and design information
+- dataset findings for rows, variables, missing cells and duplicate records
+- construct-block suggestions from repeated item names such as `trust1`, `trust2` or `trust_1`, `trust_2`
+- one-click loading of suggested construct blocks into CFA, CB-SEM or PLS-SEM for confirmation
+- user-selectable Novice, Assisted and Expert co-pilot guidance levels
+- explicit confirmation before suggested roles or construct specifications are applied
+
+The current agent combines deterministic research-method rules and dataset diagnostics. This makes the guidance reproducible and keeps the app functional without an external language-model API. A provider-backed generative explanation layer can be added later without changing the statistical engine.
+
+### Flexible path and measurement diagrams
+
+CFA, CB-SEM and PLS-SEM diagrams now support:
+
+- left-to-right layout
+- top-to-bottom layout
+- bottom-to-top layout
+- radial layout
+- hierarchical layout
+- measurement-first layout
+- structural-first layout
+- compact publication layout
+- straight or curved structural arrows
+- optional custom construct ordering
+- show or hide observed indicators, indicator names, factor loadings, path coefficients, p-values and model-fit indices
+- optional significance colouring
+- journal monochrome mode
+- transparent-background PNG export
+- standard or high-resolution rendering
+- dashed moderation arrows directed to the focal structural path
+
+The selected diagram settings are stored in the analysis plan, applied to the in-app figure and retained in DOCX, Excel and reproducibility-package exports.
 
 ## Statistical methods
 
@@ -189,10 +231,10 @@ streamlit run app.py
 
 ```bash
 pip install pytest
-PYTHONPATH=. pytest -q
+python -m pytest -q
 ```
 
-The included suite tests Phase 1 methods, automatic descriptives, exports, EFA, CFA, multiple covariance estimators, CB-SEM, PLS-SEM, repeated measures, mixed effects, multilevel diagnostics, panel selection and conditional-process models.
+The included suite contains 21 tests covering Phase 1 methods, automatic descriptives, exports, EFA, CFA, multiple covariance estimators, CB-SEM, PLS-SEM, repeated measures, mixed effects, multilevel diagnostics, panel selection, conditional-process models, AI-guided recommendations and all major path-diagram layouts.
 
 ## Deploy to Render
 

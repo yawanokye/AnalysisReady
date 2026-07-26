@@ -1,130 +1,96 @@
 from pathlib import Path
+
 import pandas as pd
 
-from statready.dispatch import run_analysis
-from statready.reports import build_docx_report, build_excel_report, build_reproducibility_package
-
-base = Path(__file__).resolve().parent
-out = base / "demo_output"
-out.mkdir(exist_ok=True)
+from statready.agent import build_guided_review
+from statready.figures import render_latent_path_diagram
+from statready.phase2 import structural_equation_model
 
 
-def export_demo(prefix, data, result, study, plan):
-    (out / f"{prefix}_Report.docx").write_bytes(build_docx_report(result, study, plan, []))
-    (out / f"{prefix}_Results.xlsx").write_bytes(build_excel_report(data, data.copy(), result, plan, []))
-    (out / f"{prefix}_Reproducibility.zip").write_bytes(build_reproducibility_package(data, data.copy(), result, study, plan, []))
-    for name, content in result.figures.items():
-        safe = "".join(ch if ch.isalnum() else "_" for ch in name).strip("_")
-        (out / f"{prefix}_{safe}.png").write_bytes(content)
+BASE = Path(__file__).resolve().parent
+OUT = BASE / "demo_output"
+OUT.mkdir(exist_ok=True)
 
 
-factor = pd.read_csv(base / "sample_data" / "phase2_factor_sample.csv")
-construct_map = {
-    "ConstructA": ["a1", "a2", "a3", "a4"],
-    "ConstructB": ["b1", "b2", "b3", "b4"],
-    "Mediator": ["m1", "m2"],
-}
-relations = [
-    {"type": "Mediator", "predictor": "ConstructA", "mediator": "Mediator", "outcome": "ConstructB", "include_direct": True},
-    {"type": "Moderator", "predictor": "ConstructA", "moderator": "Mediator", "outcome": "ConstructB"},
-]
-pls_config = {
-    "construct_map": construct_map,
-    "measurement_modes": {"ConstructA": "reflective", "ConstructB": "reflective", "Mediator": "reflective"},
-    "structural_relations": relations,
-    "paths": [("ConstructA", "Mediator"), ("Mediator", "ConstructB"), ("ConstructA", "ConstructB")],
-    "moderations": [{"predictor": "ConstructA", "moderator": "Mediator", "outcome": "ConstructB"}],
-    "bootstrap_samples": 300,
-    "max_iter": 300,
-    "tolerance": 1e-7,
-    "weighting_scheme": "Path",
-    "random_state": 42,
-    "alpha": 0.05,
-}
-pls_result = run_analysis(factor, "pls_sem", pls_config)
-pls_study = {
-    "title": "StatReady Phase 2.2 Demonstration: PLS-SEM Mediation and Moderation",
-    "objective": "Estimate the direct, mediated and moderated relationships among three latent constructs.",
-    "hypothesis": "Construct A influences Construct B directly and through the Mediator, and the relationship varies with the Mediator score.",
-    "alpha": 0.05,
-    "method": pls_result.method,
-    "framework_notes": "Construct A predicts the Mediator and Construct B. The Mediator predicts Construct B and is also used in a two-stage interaction demonstration.",
-}
-pls_plan = pd.DataFrame([
-    {"component": "Method", "specification": pls_result.method},
-    {"component": "Measurement model", "specification": "ConstructA and ConstructB use four reflective items; Mediator uses two reflective items."},
-    {"component": "Structural relationships", "specification": "Direct, mediation and moderation"},
-    {"component": "Bootstrap resamples", "specification": 300},
-    {"component": "Analysis dataset rows", "specification": len(factor)},
-])
-export_demo("StatReady_Phase2_2_PLS_SEM", factor, pls_result, pls_study, pls_plan)
+def main() -> None:
+    data = pd.read_csv(BASE / "sample_data" / "phase2_factor_sample.csv")
+    construct_map = {
+        "Digital Competence": ["a1", "a2", "a3", "a4"],
+        "Teaching Effectiveness": ["b1", "b2", "b3", "b4"],
+        "Motivation": ["m1", "m2"],
+    }
+    paths = [
+        ("Digital Competence", "Motivation"),
+        ("Motivation", "Teaching Effectiveness"),
+        ("Digital Competence", "Teaching Effectiveness"),
+    ]
+    relations = [{
+        "type": "Mediator",
+        "predictor": "Digital Competence",
+        "mediator": "Motivation",
+        "outcome": "Teaching Effectiveness",
+        "include_direct": True,
+    }]
+    result = structural_equation_model(data, construct_map, paths, estimator="ML")
 
-multilevel = pd.read_csv(base / "sample_data" / "phase2_multilevel_sample.csv")
-ml_config = {
-    "outcome": "performance",
-    "cluster": "school_id",
-    "level1_predictors": ["engagement", "prior_achievement"],
-    "level2_predictors": ["school_support"],
-    "random_slope": "engagement",
-    "estimator": "REML",
-    "centering": "Group-mean with contextual effect",
-    "optimizer": "lbfgs",
-    "gee_correlation": "Exchangeable",
-    "outcome_family": "Continuous",
-    "alpha": 0.05,
-}
-ml_result = run_analysis(multilevel, "multilevel", ml_config)
-ml_study = {
-    "title": "StatReady Phase 2.2 Demonstration: Students Nested in Schools",
-    "objective": "Estimate within-school and between-school effects on student performance.",
-    "hypothesis": "Student engagement and prior achievement predict performance, while school support contributes at level 2.",
-    "alpha": 0.05,
-    "method": ml_result.method,
-    "framework_notes": "Students are nested within schools. Engagement and prior achievement vary at level 1, while school support is a level-2 predictor.",
-}
-ml_plan = pd.DataFrame([
-    {"component": "Method", "specification": "REML multilevel linear model with GEE sensitivity"},
-    {"component": "Outcome", "specification": "performance"},
-    {"component": "Level-1 predictors", "specification": "engagement; prior_achievement"},
-    {"component": "Level-2 predictor", "specification": "school_support"},
-    {"component": "Cluster", "specification": "school_id"},
-    {"component": "Random slope", "specification": "engagement"},
-    {"component": "Centring", "specification": "Group-mean with contextual effect"},
-])
-export_demo("StatReady_Phase2_2_Multilevel", multilevel, ml_result, ml_study, ml_plan)
+    layouts = {
+        "Left_to_Right": {
+            "layout": "Left to right", "arrow_style": "Curved",
+            "show_indicators": True, "show_loadings": True,
+            "show_coefficients": True, "show_p_values": True, "show_fit": True,
+        },
+        "Top_to_Bottom": {
+            "layout": "Top to bottom", "arrow_style": "Straight",
+            "show_indicators": False, "show_loadings": False,
+            "show_coefficients": True, "show_p_values": False, "show_fit": True,
+        },
+        "Radial": {
+            "layout": "Radial", "arrow_style": "Curved",
+            "show_indicators": False, "show_loadings": False,
+            "show_coefficients": True, "show_p_values": True, "show_fit": True,
+        },
+        "Compact_Monochrome": {
+            "layout": "Compact publication", "arrow_style": "Straight",
+            "show_indicators": False, "show_loadings": False,
+            "show_coefficients": True, "show_p_values": True, "show_fit": True,
+            "monochrome": True,
+        },
+    }
+    for suffix, settings in layouts.items():
+        image = render_latent_path_diagram(
+            construct_map=construct_map,
+            loading_table=result.tables["SEM standardised loadings"],
+            paths=paths,
+            path_table=result.tables["Structural path estimates"],
+            fit_table=result.tables["SEM fit indices"],
+            title=f"StatReady AI Phase 2.3, {settings['layout']}",
+            settings=settings,
+            structural_relations=relations,
+        )
+        (OUT / f"StatReady_Phase2_3_{suffix}.png").write_bytes(image)
 
-binary_config = {
-    "outcome": "completed",
-    "cluster": "school_id",
-    "level1_predictors": ["engagement", "prior_achievement"],
-    "level2_predictors": ["school_support"],
-    "random_slope": None,
-    "estimator": "GEE robust",
-    "centering": "Group-mean with contextual effect",
-    "optimizer": "lbfgs",
-    "gee_correlation": "Exchangeable",
-    "outcome_family": "Binary",
-    "alpha": 0.05,
-}
-binary_result = run_analysis(multilevel, "multilevel", binary_config)
-binary_study = {
-    "title": "StatReady Phase 2.2 Demonstration: Binary Clustered Outcome",
-    "objective": "Estimate population-average predictors of completion for students nested within schools.",
-    "hypothesis": "Engagement, prior achievement and school support predict programme completion.",
-    "alpha": 0.05,
-    "method": binary_result.method,
-    "framework_notes": "Students are nested within schools and completion is binary.",
-}
-binary_plan = pd.DataFrame([
-    {"component": "Method", "specification": "Robust binomial GEE"},
-    {"component": "Outcome", "specification": "completed"},
-    {"component": "Level-1 predictors", "specification": "engagement; prior_achievement"},
-    {"component": "Level-2 predictor", "specification": "school_support"},
-    {"component": "Cluster", "specification": "school_id"},
-    {"component": "Working correlation", "specification": "Exchangeable"},
-])
-export_demo("StatReady_Phase2_2_Binary_GEE", multilevel, binary_result, binary_study, binary_plan)
+    study = {
+        "objective": "Examine the structural effect of digital competence on teaching effectiveness through motivation.",
+        "hypothesis": "Digital competence positively predicts teaching effectiveness directly and indirectly through motivation.",
+        "outcome_type": "continuous",
+        "group_count": 0,
+        "paired": False,
+        "framework_notes": "Digital competence predicts motivation and teaching effectiveness. Motivation mediates the relationship.",
+    }
+    framework = pd.DataFrame({"variable": data.columns, "role": ["Scale item"] * len(data.columns)})
+    review = build_guided_review(study, data, framework)
+    lines = [
+        "# StatReady AI Guided Review Demonstration", "",
+        f"**Recommended method:** {review.method_label}", "", review.reason, "",
+        "## Readiness", "",
+    ]
+    for _, row in review.readiness.iterrows():
+        lines.append(f"- **{row['component']}:** {row['status']}. {row['guidance']}")
+    lines += ["", "## Suggested construct blocks", ""]
+    for item in review.construct_suggestions:
+        lines.append(f"- **{item['name']}:** {', '.join(item['items'])}. {item['rationale']}")
+    (OUT / "StatReady_Phase2_3_AI_Guided_Review.md").write_text("\n".join(lines), encoding="utf-8")
 
-print(pls_result.summary)
-print(ml_result.summary)
-print(binary_result.summary)
+
+if __name__ == "__main__":
+    main()

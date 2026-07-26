@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.3.0
+
+- Added AI Guided Mode with Novice, Assisted and Expert co-pilot levels.
+- Added readiness checks for study objectives, hypotheses, datasets, outcome types, conceptual frameworks and variable roles.
+- Added conservative variable-role suggestions with confidence ratings and reviewable explanations.
+- Added dataset-driven construct suggestions based on repeated item-name patterns.
+- Added confirmation-controlled loading of role and construct suggestions.
+- Added left-to-right, top-to-bottom, bottom-to-top, radial, hierarchical, measurement-first, structural-first and compact publication path-diagram layouts.
+- Added straight and curved arrows, construct ordering, significance highlighting, monochrome rendering and transparent-background exports.
+- Added diagram controls for indicators, item names, loadings, coefficients, p-values and fit indices.
+- Added visible moderation arrows to the focal structural path.
+- Added diagram settings to the analysis plan and retained them in all figure exports.
+- Expanded the automated test suite from 18 to 21 passing tests.
+
 ## 2.2.0
 
 - Replaced free-text construct syntax with named construct builders and indicator dropdowns.
