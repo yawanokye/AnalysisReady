@@ -221,3 +221,146 @@ def test_phase2_dispatch_and_exports():
     plan = pd.DataFrame([{"component": "Method", "specification": result.method}])
     assert build_docx_report(result, study, plan, [])[:2] == b"PK"
     assert build_excel_report(df, df, result, plan, [])[:2] == b"PK"
+
+
+def test_phase22_pls_sem_measurement_structural_and_diagnostics():
+    from statready.pls_sem import partial_least_squares_sem
+    df = make_phase2_data()
+    construct_map = {
+        "ConstructA": [f"a{i}" for i in range(1, 5)],
+        "ConstructB": [f"b{i}" for i in range(1, 5)],
+        "Mediator": ["m1", "m2"],
+    }
+    result = partial_least_squares_sem(
+        df,
+        construct_map=construct_map,
+        paths=[("ConstructA", "Mediator"), ("Mediator", "ConstructB"), ("ConstructA", "ConstructB")],
+        measurement_modes={"ConstructA": "reflective", "ConstructB": "reflective", "Mediator": "reflective"},
+        moderations=[{"predictor": "ConstructA", "moderator": "Mediator", "outcome": "ConstructB"}],
+        bootstrap_samples=100,
+        random_state=9,
+    )
+    assert "PLS outer loadings" in result.tables
+    assert "HTMT discriminant validity" in result.tables
+    assert "Inner VIF" in result.tables
+    assert "Endogenous construct R squared" in result.tables
+    assert "Structural effect sizes f squared" in result.tables
+    assert "Predictive relevance Q squared" in result.tables
+    assert len(result.tables["PLS structural path estimates"]) >= 4
+    assert set(["Reflective indicator reliability", "Discriminant validity", "Structural-model collinearity"]).issubset(set(result.diagnostics["diagnostic"]))
+
+
+def test_phase22_multilevel_estimators_and_diagnostics():
+    from statready.multilevel import multilevel_linear_model
+    import numpy as np
+    rng = np.random.default_rng(31)
+    clusters = np.repeat(np.arange(18), 10)
+    x = rng.normal(size=len(clusters))
+    z_cluster = rng.normal(size=18)
+    z = np.repeat(z_cluster, 10)
+    y = 1.0 + 0.75 * x + 0.45 * z + np.repeat(rng.normal(scale=0.7, size=18), 10) + rng.normal(scale=0.8, size=len(clusters))
+    frame = pd.DataFrame({"cluster": clusters, "x": x, "z": z, "y": y})
+    result = multilevel_linear_model(
+        frame, "y", ["x"], ["z"], "cluster", random_slope="x",
+        estimator="REML", centering="Group-mean with contextual effect",
+    )
+    fit = result.tables["Multilevel model fit and variance partition"].iloc[0]
+    assert fit["converged"]
+    assert 0 <= fit["icc_1"] <= 1
+    assert "Alternative estimator sensitivity coefficients" in result.tables
+    expected = {"Need for multilevel modelling", "Reliability of cluster means", "Random-effects singularity", "Influential clusters"}
+    assert expected.issubset(set(result.diagnostics["diagnostic"]))
+
+
+def test_phase22_additional_covariance_estimators_and_dispatch():
+    df = make_phase2_data()
+    construct_map = {"ConstructA": [f"a{i}" for i in range(1, 5)], "ConstructB": [f"b{i}" for i in range(1, 5)]}
+    for estimator in ["ML", "GLS", "ULS", "DWLS"]:
+        result = run_analysis(df, "cfa", {
+            "construct_map": construct_map, "alpha": 0.05, "random_state": 42, "estimator": estimator,
+        })
+        assert result.tables["CFA fit indices"].iloc[0]["estimator"] == estimator
+    pls = run_analysis(df, "pls_sem", {
+        "construct_map": construct_map,
+        "measurement_modes": {"ConstructA": "reflective", "ConstructB": "reflective"},
+        "paths": [("ConstructA", "ConstructB")],
+        "moderations": [],
+        "bootstrap_samples": 100,
+        "random_state": 42,
+        "alpha": 0.05,
+    })
+    assert "PLS-SEM path diagram" in pls.figures
+    assert pls.figures["PLS-SEM path diagram"][:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_phase22_pls_weighting_formative_bootstrap_and_joint_mediation():
+    from statready.pls_sem import partial_least_squares_sem
+    df = make_phase2_data()
+    construct_map = {
+        "ConstructA": [f"a{i}" for i in range(1, 5)],
+        "ConstructB": [f"b{i}" for i in range(1, 5)],
+        "Mediator": ["m1", "m2"],
+    }
+    relations = [{
+        "type": "Mediator", "predictor": "ConstructA", "mediator": "Mediator",
+        "outcome": "ConstructB", "include_direct": True,
+    }]
+    result = partial_least_squares_sem(
+        df,
+        construct_map=construct_map,
+        paths=[("ConstructA", "Mediator"), ("Mediator", "ConstructB"), ("ConstructA", "ConstructB")],
+        measurement_modes={"ConstructA": "reflective", "ConstructB": "reflective", "Mediator": "formative"},
+        structural_relations=relations,
+        bootstrap_samples=60,
+        weighting_scheme="Factorial",
+        random_state=13,
+    )
+    assert result.metadata["weighting_scheme"] == "Factorial"
+    assert "bootstrap_p" in result.tables["PLS outer weights"].columns
+    assert "Specified mediation effects" in result.tables
+    assert result.tables["Specified mediation effects"].iloc[0]["bootstrap_draws"] >= 20
+    assert "Formative indicator contribution" in set(result.diagnostics["diagnostic"])
+
+
+def test_phase22_sem_diagnostics_r_squared_and_latent_vif():
+    from statready.phase2 import structural_equation_model
+    df = make_phase2_data()
+    construct_map = {
+        "ConstructA": [f"a{i}" for i in range(1, 5)],
+        "ConstructB": [f"b{i}" for i in range(1, 5)],
+    }
+    result = structural_equation_model(df, construct_map, [("ConstructA", "ConstructB")], estimator="GLS")
+    assert "Endogenous construct R squared" in result.tables
+    assert "Latent structural VIF" in result.tables
+    expected = {"Model identification", "Numerical convergence", "Estimator suitability", "Admissible measurement solution"}
+    assert expected.issubset(set(result.diagnostics["diagnostic"]))
+
+
+def test_phase22_multilevel_binary_and_count_gee():
+    from statready.multilevel import multilevel_linear_model
+    import numpy as np
+    rng = np.random.default_rng(41)
+    clusters = np.repeat(np.arange(24), 16)
+    x = rng.normal(size=len(clusters))
+    z_cluster = rng.normal(size=24)
+    z = np.repeat(z_cluster, 16)
+    u = np.repeat(rng.normal(scale=0.55, size=24), 16)
+    probability = 1 / (1 + np.exp(-(-0.3 + 0.8 * x + 0.35 * z + u)))
+    binary = rng.binomial(1, probability)
+    count = rng.poisson(np.exp(0.2 + 0.25 * x + 0.2 * z + u))
+    frame = pd.DataFrame({"cluster": clusters, "x": x, "z": z, "binary": binary, "count": count})
+
+    binary_result = multilevel_linear_model(
+        frame, "binary", ["x"], ["z"], "cluster",
+        estimator="GEE robust", outcome_family="Binary", gee_correlation="Exchangeable",
+    )
+    assert binary_result.metadata["outcome_family"] == "Binary"
+    assert "effect_ratio" in binary_result.tables["Multilevel fixed effects"].columns
+    assert "Conditional dispersion" in set(binary_result.diagnostics["diagnostic"])
+
+    count_result = multilevel_linear_model(
+        frame, "count", ["x"], ["z"], "cluster",
+        estimator="GEE robust", outcome_family="Count", gee_correlation="Independence",
+    )
+    assert count_result.metadata["outcome_family"] == "Count"
+    assert count_result.tables["Multilevel model fit and variance partition"].iloc[0]["pseudo_r_squared_name"] == "Poisson deviance explained"
