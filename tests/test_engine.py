@@ -364,3 +364,80 @@ def test_phase22_multilevel_binary_and_count_gee():
     )
     assert count_result.metadata["outcome_family"] == "Count"
     assert count_result.tables["Multilevel model fit and variance partition"].iloc[0]["pseudo_r_squared_name"] == "Poisson deviance explained"
+
+
+def test_ai_guided_review_and_construct_suggestions():
+    from statready.agent import build_guided_review, suggest_constructs
+    df = make_phase2_data()
+    study = {
+        "objective": "Examine the structural effect of ConstructA on ConstructB using SEM",
+        "hypothesis": "ConstructA positively predicts ConstructB",
+        "outcome_type": "continuous",
+        "group_count": 0,
+        "paired": False,
+        "framework_notes": "ConstructA predicts ConstructB.",
+    }
+    framework = pd.DataFrame({
+        "variable": list(df.columns),
+        "role": ["Scale item"] * len(df.columns),
+    })
+    review = build_guided_review(study, df, framework)
+    assert review.method_key == "sem"
+    assert not review.role_suggestions.empty
+    suggestions = suggest_constructs(df)
+    names = {item["name"] for item in suggestions}
+    assert {"A", "B"}.issubset(names)
+
+
+def test_path_diagram_layout_options():
+    from PIL import Image
+    from io import BytesIO
+    from statready.figures import render_latent_path_diagram
+
+    construct_map = {"A": ["a1", "a2", "a3"], "B": ["b1", "b2", "b3"]}
+    loading_table = pd.DataFrame([
+        {"construct": "A", "item": "a1", "standardized_loading": 0.8},
+        {"construct": "A", "item": "a2", "standardized_loading": 0.75},
+        {"construct": "A", "item": "a3", "standardized_loading": 0.7},
+        {"construct": "B", "item": "b1", "standardized_loading": 0.82},
+        {"construct": "B", "item": "b2", "standardized_loading": 0.77},
+        {"construct": "B", "item": "b3", "standardized_loading": 0.72},
+    ])
+    path_table = pd.DataFrame([{"predictor": "A", "outcome": "B", "standardized_estimate": 0.45, "p_value": 0.01}])
+    for layout in ["Left to right", "Top to bottom", "Bottom to top", "Radial", "Hierarchical", "Compact publication"]:
+        output = render_latent_path_diagram(
+            construct_map, loading_table, [("A", "B")], path_table,
+            settings={"layout": layout, "arrow_style": "Curved", "show_indicators": True},
+        )
+        assert output[:8] == b"\x89PNG\r\n\x1a\n"
+        image = Image.open(BytesIO(output))
+        assert image.width >= 1200
+        assert image.height >= 650
+
+
+def test_dispatch_respects_transparent_high_resolution_diagram():
+    from PIL import Image
+    from io import BytesIO
+    df = make_phase2_data()
+    construct_map = {"ConstructA": [f"a{i}" for i in range(1, 5)], "ConstructB": [f"b{i}" for i in range(1, 5)]}
+    result = run_analysis(df, "sem", {
+        "construct_map": construct_map,
+        "paths": [("ConstructA", "ConstructB")],
+        "structural_relations": [{"type": "Direct", "predictor": "ConstructA", "outcome": "ConstructB"}],
+        "diagram_settings": {
+            "layout": "Top to bottom",
+            "transparent": True,
+            "resolution": "High resolution",
+            "show_indicators": True,
+            "show_loadings": True,
+            "show_coefficients": True,
+            "show_p_values": False,
+        },
+        "alpha": 0.05,
+        "random_state": 42,
+        "estimator": "ML",
+    })
+    image = Image.open(BytesIO(result.figures["SEM path diagram"]))
+    assert image.mode == "RGBA"
+    assert image.width > 1600
+    assert result.metadata["diagram_settings"]["layout"] == "Top to bottom"
