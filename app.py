@@ -25,7 +25,7 @@ st.set_page_config(page_title="StatReady AI", page_icon="📊", layout="wide")
 
 
 METHOD_OPTIONS = {label: key for key, label in METHOD_LABELS.items()}
-ROLE_OPTIONS = ["Unassigned", "Outcome", "Predictor", "Mediator", "Moderator", "Control", "Group", "Scale item", "Identifier", "Time"]
+ROLE_OPTIONS = ["Unassigned", "Outcome", "Predictor", "Mediator", "Moderator", "Control", "Group", "Scale item", "Cluster", "Entity", "Identifier", "Time"]
 MEASUREMENT_OPTIONS = ["Unknown", "Binary", "Nominal", "Ordinal", "Continuous", "Count", "Date/time", "Identifier"]
 
 
@@ -125,6 +125,15 @@ def analysis_plan_frame(method_label: str, config: dict) -> pd.DataFrame:
         "Controls": ", ".join(config.get("controls", [])),
         "Variables": ", ".join(config.get("variables", config.get("items", []))),
         "Additional descriptive profile variables": ", ".join(config.get("profile_variables", [])),
+        "Factor items": ", ".join(config.get("items", [])),
+        "Construct measurement model": "; ".join(f"{construct}: {', '.join(items)}" for construct, items in (config.get("construct_map") or {}).items()),
+        "Structural paths": "; ".join(f"{predictor} -> {outcome}" for predictor, outcome in (config.get("paths") or [])),
+        "Repeated measurements": ", ".join(config.get("measurements", [])),
+        "Subject identifier": config.get("subject_id", ""),
+        "Cluster variable": config.get("cluster", ""),
+        "Entity identifier": config.get("entity", ""),
+        "Time identifier": config.get("time", ""),
+        "Panel model choice": config.get("model_choice", ""),
         "Analysis dataset rows": len(st.session_state.analysis_df) if st.session_state.analysis_df is not None else 0,
     }
     return pd.DataFrame([{"component": key, "specification": value} for key, value in fields.items() if value not in ("", [], None)])
@@ -138,6 +147,41 @@ def variable_selector(label: str, columns: list[str], key: str, allow_none: bool
     default_value = default if default in options else options[0]
     selected = st.selectbox(label, options, index=options.index(default_value), key=key)
     return None if selected == "<none>" else selected
+
+
+def parse_construct_map(text: str, columns: list[str]) -> tuple[dict[str, list[str]], str | None]:
+    mapping: dict[str, list[str]] = {}
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        if ":" not in line:
+            return {}, f"Construct specification line {line_number} must use 'Construct: item1, item2'."
+        construct, raw_items = line.split(":", 1)
+        construct = construct.strip()
+        items = [item.strip() for item in raw_items.split(",") if item.strip()]
+        if not construct or len(items) < 2:
+            return {}, f"Construct specification line {line_number} requires a name and at least two items."
+        unknown = [item for item in items if item not in columns]
+        if unknown:
+            return {}, f"Unknown item(s) on line {line_number}: {', '.join(unknown)}."
+        mapping[construct] = items
+    return mapping, None
+
+
+def parse_structural_paths(text: str) -> tuple[list[tuple[str, str]], str | None]:
+    paths: list[tuple[str, str]] = []
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        if "->" not in line:
+            return [], f"Structural path line {line_number} must use 'Predictor -> Outcome'."
+        predictor, outcome = [part.strip() for part in line.split("->", 1)]
+        if not predictor or not outcome:
+            return [], f"Structural path line {line_number} is incomplete."
+        paths.append((predictor, outcome))
+    return paths, None
 
 
 def render_method_configuration(method_key: str, columns: list[str], numeric_columns: list[str]) -> dict:
@@ -187,6 +231,75 @@ def render_method_configuration(method_key: str, columns: list[str], numeric_col
         config["controls"] = st.multiselect("Optional controls", [c for c in numeric_columns if c not in excluded])
         config["bootstrap_samples"] = st.number_input("Bootstrap resamples", min_value=500, max_value=5000, value=1000, step=500)
         config["random_state"] = st.number_input("Random seed", min_value=0, max_value=999999, value=42, step=1)
+    elif method_key == "efa":
+        config["items"] = st.multiselect("Observed items", numeric_columns, default=[v for v in roles["Scale item"] if v in numeric_columns])
+        automatic = st.checkbox("Choose factor count using parallel analysis", value=True)
+        config["n_factors"] = None if automatic else int(st.number_input("Number of factors", min_value=1, max_value=max(1, len(config["items"]) - 1), value=1, step=1))
+        config["rotation"] = st.selectbox("Rotation", ["varimax", "none"])
+        config["parallel_iterations"] = int(st.number_input("Parallel-analysis simulations", min_value=50, max_value=500, value=100, step=50))
+        config["random_state"] = int(st.number_input("Random seed", min_value=0, max_value=999999, value=42, step=1, key="efa_seed"))
+    elif method_key in {"cfa", "sem"}:
+        default_spec = st.session_state.study.get(f"{method_key}_construct_spec", "")
+        construct_text = st.text_area(
+            "Construct measurement specification", value=default_spec, height=150,
+            placeholder="DigitalCompetence: dc1, dc2, dc3\nTeachingEffectiveness: te1, te2, te3",
+            help="Enter one construct per line. Every item must match a numeric dataset column and can appear only once.",
+            key=f"{method_key}_construct_text",
+        )
+        st.session_state.study[f"{method_key}_construct_spec"] = construct_text
+        config["construct_map"], config["construct_parse_error"] = parse_construct_map(construct_text, numeric_columns)
+        if method_key == "sem":
+            path_text = st.text_area(
+                "Structural paths", value=st.session_state.study.get("sem_paths", ""), height=120,
+                placeholder="DigitalCompetence -> TeachingEffectiveness",
+                help="Enter one directed path per line. Phase 2 supports acyclic structural models.",
+                key="sem_path_text",
+            )
+            st.session_state.study["sem_paths"] = path_text
+            config["paths"], config["path_parse_error"] = parse_structural_paths(path_text)
+        config["random_state"] = int(st.number_input("Random seed", min_value=0, max_value=999999, value=42, step=1, key=f"{method_key}_seed"))
+    elif method_key == "repeated_measures":
+        config["measurements"] = st.multiselect("Repeated measurement columns", numeric_columns)
+        config["subject_id"] = variable_selector("Subject identifier (optional)", columns, "rm_subject", allow_none=True, default=next((v for v in roles["Identifier"] if v in columns), None))
+    elif method_key == "mixed_effects":
+        config["outcome"] = variable_selector("Continuous outcome", numeric_columns, "mixed_outcome", default=default_outcome)
+        config["cluster"] = variable_selector("Cluster or subject identifier", columns, "mixed_cluster", default=next((v for v in roles["Cluster"] + roles["Group"] + roles["Identifier"] if v in columns), None))
+        candidates = [c for c in numeric_columns if c != config["outcome"]]
+        config["predictors"] = st.multiselect("Fixed-effect predictors", candidates, default=[v for v in default_predictors if v in candidates])
+        config["random_slope"] = variable_selector("Optional random-slope variable", candidates, "mixed_slope", allow_none=True)
+        config["reml"] = st.checkbox("Use restricted maximum likelihood", value=True)
+    elif method_key == "panel":
+        config["outcome"] = variable_selector("Continuous outcome", numeric_columns, "panel_outcome", default=default_outcome)
+        config["entity"] = variable_selector("Entity identifier", columns, "panel_entity", default=next((v for v in roles["Entity"] + roles["Identifier"] if v in columns), None))
+        config["time"] = variable_selector("Time variable", columns, "panel_time", default=next((v for v in roles["Time"] if v in columns), None))
+        excluded = {config["outcome"], config["entity"], config["time"]}
+        config["predictors"] = st.multiselect("Time-varying predictors", [c for c in numeric_columns if c not in excluded], default=[v for v in default_predictors if v not in excluded])
+        config["model_choice"] = st.selectbox("Panel specification", ["automatic", "pooled", "fixed", "random"])
+        config["include_time_effects"] = st.checkbox("Include time fixed effects", value=False)
+    elif method_key == "advanced_moderation":
+        config["outcome"] = variable_selector("Outcome", numeric_columns, "advmod_outcome", default=default_outcome)
+        config["predictor"] = variable_selector("Focal predictor", numeric_columns, "advmod_predictor", default=next((v for v in roles["Predictor"] if v in numeric_columns), None))
+        config["moderator"] = variable_selector("Continuous moderator", numeric_columns, "advmod_moderator", default=default_moderator)
+        excluded = {config["outcome"], config["predictor"], config["moderator"]}
+        config["controls"] = st.multiselect("Optional controls", [c for c in numeric_columns if c not in excluded], key="advmod_controls")
+    elif method_key == "parallel_mediation":
+        config["outcome"] = variable_selector("Outcome", numeric_columns, "pmed_outcome", default=default_outcome)
+        config["predictor"] = variable_selector("Predictor", numeric_columns, "pmed_predictor", default=next((v for v in roles["Predictor"] if v in numeric_columns), None))
+        excluded = {config["outcome"], config["predictor"]}
+        config["mediators"] = st.multiselect("Parallel mediators", [c for c in numeric_columns if c not in excluded], default=[v for v in roles["Mediator"] if v in numeric_columns])
+        excluded.update(config["mediators"])
+        config["controls"] = st.multiselect("Optional controls", [c for c in numeric_columns if c not in excluded], key="pmed_controls")
+        config["bootstrap_samples"] = int(st.number_input("Bootstrap resamples", min_value=500, max_value=5000, value=1000, step=500, key="pmed_boot"))
+        config["random_state"] = int(st.number_input("Random seed", min_value=0, max_value=999999, value=42, step=1, key="pmed_seed"))
+    elif method_key == "moderated_mediation":
+        config["outcome"] = variable_selector("Outcome", numeric_columns, "mm_outcome", default=default_outcome)
+        config["predictor"] = variable_selector("Predictor", numeric_columns, "mm_predictor", default=next((v for v in roles["Predictor"] if v in numeric_columns), None))
+        config["mediator"] = variable_selector("Mediator", numeric_columns, "mm_mediator", default=default_mediator)
+        config["moderator"] = variable_selector("First-stage moderator", numeric_columns, "mm_moderator", default=default_moderator)
+        excluded = {config["outcome"], config["predictor"], config["mediator"], config["moderator"]}
+        config["controls"] = st.multiselect("Optional controls", [c for c in numeric_columns if c not in excluded], key="mm_controls")
+        config["bootstrap_samples"] = int(st.number_input("Bootstrap resamples", min_value=500, max_value=5000, value=1000, step=500, key="mm_boot"))
+        config["random_state"] = int(st.number_input("Random seed", min_value=0, max_value=999999, value=42, step=1, key="mm_seed"))
 
     if method_key != "descriptive":
         config["profile_variables"] = st.multiselect(
@@ -210,6 +323,15 @@ def validate_config(method_key: str, config: dict) -> str | None:
         "logistic": ["outcome", "predictors"],
         "moderation": ["outcome", "predictor", "moderator"],
         "mediation": ["outcome", "predictor", "mediator"],
+        "efa": ["items"],
+        "cfa": ["construct_map"],
+        "sem": ["construct_map", "paths"],
+        "repeated_measures": ["measurements"],
+        "mixed_effects": ["outcome", "predictors", "cluster"],
+        "panel": ["outcome", "predictors", "entity", "time"],
+        "advanced_moderation": ["outcome", "predictor", "moderator"],
+        "parallel_mediation": ["outcome", "predictor", "mediators"],
+        "moderated_mediation": ["outcome", "predictor", "mediator", "moderator"],
     }.get(method_key, [])
     for field in required:
         value = config.get(field)
@@ -221,13 +343,25 @@ def validate_config(method_key: str, config: dict) -> str | None:
         return "Select two different measurements."
     if method_key == "chi_square" and config.get("row_variable") == config.get("column_variable"):
         return "Select two different categorical variables."
+    if method_key == "efa" and len(config.get("items", [])) < 3:
+        return "Select at least three observed items for EFA."
+    if method_key in {"cfa", "sem"} and config.get("construct_parse_error"):
+        return config["construct_parse_error"]
+    if method_key == "sem" and config.get("path_parse_error"):
+        return config["path_parse_error"]
+    if method_key == "repeated_measures" and len(config.get("measurements", [])) < 2:
+        return "Select at least two repeated measurements."
+    if method_key == "parallel_mediation" and len(config.get("mediators", [])) < 2:
+        return "Select at least two parallel mediators."
+    if method_key == "panel" and config.get("entity") == config.get("time"):
+        return "Entity and time identifiers must be different variables."
     return None
 
 
 init_state()
 
 st.title("StatReady AI")
-st.caption("Phase 1: objective-aligned statistical analysis, diagnostics, transparent treatments and reproducible reporting")
+st.caption("Phase 2: objective-aligned statistics, latent-variable analysis, longitudinal models, diagnostics and reproducible reporting")
 st.info("The app never changes data merely to obtain significance. It preserves the original dataset, records every treatment, uses robust or alternative methods where justified, and keeps sensitivity results visible.")
 
 study_tab, data_tab, framework_tab, analysis_tab, results_tab = st.tabs([
@@ -248,6 +382,7 @@ with study_tab:
         alpha = st.number_input("Default significance level", min_value=0.001, max_value=0.20, value=float(st.session_state.study.get("alpha", 0.05)), step=0.01, format="%.3f")
 
     st.session_state.study = {
+        **st.session_state.study,
         "title": title,
         "objective": objective,
         "hypothesis": hypothesis,
@@ -271,15 +406,19 @@ with study_tab:
 with data_tab:
     st.subheader("Upload and screen the dataset")
     uploaded = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx", "xls"])
+    upload_allowed = True
+    if uploaded is not None and getattr(uploaded, "size", 0) > 100 * 1024 * 1024:
+        st.error("The file exceeds the 100 MB deployment limit. Reduce the file or use a higher-capacity private deployment.")
+        upload_allowed = False
     selected_sheet = None
-    if uploaded is not None and Path(uploaded.name).suffix.lower() in {".xlsx", ".xls"}:
+    if uploaded is not None and upload_allowed and Path(uploaded.name).suffix.lower() in {".xlsx", ".xls"}:
         try:
             sheets = list_excel_sheets(uploaded.getvalue())
             selected_sheet = st.selectbox("Excel sheet", sheets)
         except Exception as exc:
             st.error(f"Could not read workbook sheets: {exc}")
 
-    if uploaded is not None and st.button("Load dataset", type="primary"):
+    if uploaded is not None and upload_allowed and st.button("Load dataset", type="primary"):
         try:
             load_uploaded_data(uploaded, selected_sheet)
             st.success("Dataset loaded. The original copy is preserved.")
@@ -400,7 +539,7 @@ with framework_tab:
             placeholder="Example: Digital competence predicts online teaching effectiveness. Motivation mediates the relationship, while institutional support moderates it.",
         )
         st.session_state.study["framework_notes"] = framework_notes
-        st.caption("Image extraction of conceptual frameworks can be added later. Phase 1 uses confirmed structured roles to avoid incorrect automatic interpretation.")
+        st.caption("Image extraction can be added later. Phase 2 uses confirmed structured roles and explicit construct specifications to avoid incorrect automatic interpretation.")
 
 with analysis_tab:
     st.subheader("Configure and run analysis")
@@ -417,6 +556,8 @@ with analysis_tab:
         selected_key = METHOD_OPTIONS[selected_label]
         config = render_method_configuration(selected_key, columns, numeric_columns)
         config["alpha"] = float(config.get("alpha", st.session_state.study.get("alpha", 0.05)))
+        if selected_key in {"cfa", "sem"}:
+            st.warning("Phase 2 CFA and SEM use the internal maximum-likelihood covariance engine. Confirm publication-critical models in specialist SEM software, especially when using complex specifications or smaller samples.")
 
         st.markdown("#### Pre-analysis confirmation")
         preview_plan = analysis_plan_frame(selected_label, config)
@@ -429,7 +570,8 @@ with analysis_tab:
                 st.error(validation_error)
             else:
                 try:
-                    result = run_analysis(df, selected_key, config)
+                    with st.spinner("Running the analysis and diagnostics..."):
+                        result = run_analysis(df, selected_key, config)
                     st.session_state.analysis_result = result
                     st.session_state.analysis_plan = preview_plan
                     st.session_state.study["method"] = selected_label
@@ -449,6 +591,20 @@ with results_tab:
         if result.warnings:
             for warning in result.warnings:
                 st.warning(warning)
+
+        if result.figures:
+            st.markdown("### Path and measurement diagram")
+            st.caption("Standardised estimates are displayed. Interpret the figure together with the coefficient tables, diagnostics and model-fit indices.")
+            for figure_index, (figure_name, figure_bytes) in enumerate(result.figures.items(), start=1):
+                st.image(figure_bytes, caption=figure_name, use_container_width=True)
+                safe_name = "".join(ch if ch.isalnum() else "_" for ch in figure_name).strip("_")
+                st.download_button(
+                    f"Download {figure_name} (PNG)",
+                    figure_bytes,
+                    file_name=f"{safe_name}.png",
+                    mime="image/png",
+                    key=f"figure_download_{figure_index}_{safe_name}",
+                )
 
         descriptive_tables = {name: table for name, table in result.tables.items() if name.startswith("Descriptive ")}
         inferential_tables = {name: table for name, table in result.tables.items() if not name.startswith("Descriptive ")}
@@ -477,7 +633,7 @@ with results_tab:
         if inferential_tables:
             st.markdown("### Inferential results")
             for name, table in inferential_tables.items():
-                with st.expander(name, expanded=name in {"Selected coefficient table", "Test result", "Model fit", "Indirect effect", "Multicollinearity action summary", "Ridge sensitivity model fit"}):
+                with st.expander(name, expanded=name in {"Selected coefficient table", "Test result", "Model fit", "Indirect effect", "Multicollinearity action summary", "Ridge sensitivity model fit", "CFA fit indices", "SEM fit indices", "Structural path estimates", "Panel model decision", "Repeated-measures ANOVA", "Fixed effects", "Parallel indirect effects", "Conditional indirect effects"}):
                     st.dataframe(table, use_container_width=True, hide_index=True)
 
         st.markdown("### Diagnostics and assumptions")
@@ -502,7 +658,7 @@ with results_tab:
         st.markdown("### Supporting methodological literature")
         refs = references_for_method(result.method, result.diagnostics)
         st.dataframe(refs, use_container_width=True, hide_index=True)
-        st.caption("Phase 1 uses a curated methodological library. Live DOI and metadata verification can be connected to CiteIntegrity in the next integration step.")
+        st.caption("Phase 2 uses a curated methodological library. Live DOI and metadata verification can be connected to CiteIntegrity in the next integration step.")
 
         st.markdown("### Export")
         study = st.session_state.study
@@ -524,4 +680,4 @@ with results_tab:
             st.code(result.reproducible_code, language="python")
 
 st.divider()
-st.caption("StatReady AI Phase 1 | Original data preserved | All treatments logged | Robust alternatives documented | No significance-seeking data manipulation")
+st.caption("StatReady AI Phase 2 | Original data preserved | Advanced models audited | Alternatives documented | No significance-seeking data manipulation")

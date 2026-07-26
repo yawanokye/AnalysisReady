@@ -1,29 +1,82 @@
-# StatReady AI, Phase 1
+# StatReady AI, Phase 2
 
-StatReady AI is a transparent statistical analysis and reporting application for CSV and Excel data. It links research objectives, hypotheses and conceptual-framework roles to statistical methods, diagnostics, defensible responses and reproducible exports.
+StatReady AI is a transparent statistical analysis and reporting application for CSV and Excel data. It connects research objectives, hypotheses, conceptual-framework roles and dataset structure to statistical methods, diagnostics, defensible responses and reproducible exports.
 
-## What Phase 1 includes
+## Phase 1 foundation
 
-- CSV, XLSX and XLS upload
-- Excel sheet selection
+- CSV, XLSX and XLS upload with Excel sheet selection
 - Preserved original dataset and separate analysis copy
-- Dataset profile, missingness, duplicate and outlier screening
+- Dataset profile, missingness, duplicates and outlier screening
 - Structured conceptual-framework and variable-role editor
 - Rule-based method recommendation from objectives and hypotheses
-- Automatic descriptive statistics for every analysis, including sample overview, missingness, numeric summaries, categorical frequencies and grouped summaries where relevant
-- Cronbach's alpha and item diagnostics
-- Pearson and Spearman correlations
-- Independent and paired t-tests
-- One-way and Welch ANOVA
-- Chi-square and Fisher's exact tests
-- OLS regression with HC3 robust inference
+- Automatic descriptive statistics for every inferential analysis
+- Cronbach's alpha, correlations, t-tests, ANOVA, chi-square and Fisher's exact test
+- OLS with HC3 inference and automatic ridge sensitivity for material VIF
 - Binary logistic regression
-- Moderation analysis
-- Bootstrap mediation analysis
-- Assumption and diagnostic summaries
-- Complete audit trail for data treatments and analysis adjustments
-- DOCX, Excel, cleaned CSV, code and full reproducibility ZIP exports
-- Curated supporting methodological literature
+- Basic moderation and bootstrap mediation
+- Complete treatment and analysis audit trail
+- DOCX, Excel, CSV, code and reproducibility ZIP exports
+
+## Phase 2 methods
+
+### Measurement and latent-variable models
+
+- Exploratory factor analysis
+  - KMO overall and item-level diagnostics
+  - Bartlett test of sphericity
+  - parallel analysis for factor retention
+  - maximum-likelihood factor extraction
+  - optional varimax rotation
+  - communalities, uniqueness, variance explained and factor scores
+- Confirmatory factor analysis
+  - explicit construct-to-item specification
+  - maximum-likelihood covariance fitting
+  - CFI, TLI, RMSEA, SRMR and model chi-square
+  - standardised loadings and item R-squared
+  - composite reliability and average variance extracted
+  - latent-factor correlations and residual-correlation review
+- Covariance-based structural equation modelling
+  - explicit construct measurement specification
+  - directed acyclic structural paths
+  - simultaneous measurement and structural covariance fitting
+  - structural path estimates, fit indices and latent covariance matrix
+  - numerical standard-error sensitivity output
+
+### Longitudinal and clustered analysis
+
+- Repeated-measures ANOVA
+  - within-subject descriptives
+  - approximate Mauchly sphericity assessment
+  - Greenhouse-Geisser correction when required
+  - Holm-adjusted paired comparisons and Cohen's dz
+- Linear mixed-effects models
+  - random intercept
+  - optional random slope
+  - fixed effects, variance components and ICC
+  - cluster-size and convergence diagnostics
+- Panel-data models
+  - pooled OLS with entity-clustered standard errors
+  - entity fixed effects
+  - random effects
+  - entity-effects F test
+  - Hausman specification comparison
+  - automatic or user-selected model
+  - optional time fixed effects
+
+### Advanced conditional-process analysis
+
+- Advanced moderation
+  - HC3 robust interaction model
+  - simple slopes at the moderator mean and plus or minus one standard deviation
+  - Johnson-Neyman boundaries
+- Parallel multiple mediation
+  - mediator-specific indirect effects
+  - total indirect effect
+  - bootstrap confidence intervals
+- First-stage moderated mediation
+  - conditional indirect effects at three moderator levels
+  - index of moderated mediation
+  - bootstrap confidence intervals
 
 ## Integrity safeguards
 
@@ -32,9 +85,29 @@ The app does not change data to produce statistical significance. It:
 1. Preserves the uploaded dataset as the original copy.
 2. Applies treatments only to a separate analysis copy.
 3. Records every treatment, reason, affected variable and sample-size effect.
-4. Uses robust or alternative inference when assumptions fail.
-5. Keeps the untreated and sensitivity results available for comparison.
-6. Warns against automatic outlier deletion, unjustified category combination and significance-driven transformations.
+4. Uses robust, corrected or alternative inference when diagnostics require it.
+5. Keeps primary and sensitivity results visible.
+6. Does not automatically delete indicators, add SEM paths, correlate errors or remove observations to improve fit.
+7. Warns when advanced estimates require confirmation in a specialist package.
+
+## Construct specification syntax
+
+For CFA and SEM, enter one construct per line:
+
+```text
+DigitalCompetence: dc1, dc2, dc3, dc4
+TeachingEffectiveness: te1, te2, te3, te4
+InstitutionalSupport: is1, is2, is3
+```
+
+For SEM, enter one directed path per line:
+
+```text
+DigitalCompetence -> TeachingEffectiveness
+InstitutionalSupport -> TeachingEffectiveness
+```
+
+Phase 2 supports acyclic structural models. Every observed item can load on only one construct in the current implementation.
 
 ## Run locally
 
@@ -51,80 +124,106 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-Open the local address displayed by Streamlit.
-
-## Run the tests
+## Run tests
 
 ```bash
 pip install pytest
-pytest -q
+PYTHONPATH=. pytest -q
 ```
+
+The included suite tests Phase 1 methods, automatic descriptives, exports, EFA, CFA, SEM, repeated measures, mixed effects, panel selection, advanced moderation, parallel mediation and moderated mediation.
 
 ## Deploy to Render
 
-### Docker deployment
+1. Push the extracted project folder to a private GitHub repository.
+2. Keep `Dockerfile`, `render.yaml`, `requirements.txt` and `app.py` at the repository root.
+3. In Render, select **New → Blueprint**.
+4. Connect the repository.
+5. Render will create the Docker web service from `render.yaml`.
 
-1. Push this folder to a GitHub repository.
-2. In Render, create a new Blueprint and select the repository.
-3. Render will use `render.yaml` and `Dockerfile`.
-4. Deploy the service.
+Current Blueprint defaults:
 
-The Docker command uses Render's `PORT` variable automatically.
+- service name: `statready-ai`
+- region: Frankfurt
+- plan: Starter
+- health check: `/_stcore/health`
+- automatic deployment after each committed update
 
-### Manual web service
+Use Standard or higher for larger files, CFA/SEM, mixed models or intensive bootstrap analyses.
 
-- Runtime: Docker
-- Health check: `/_stcore/health`
-- Instance: Starter or higher for larger Excel files and bootstrap analyses
+## Suggested demonstrations
 
-## Suggested first demonstration
+### Phase 1 sample
 
-Upload `sample_data/sample_research_data.csv` and try:
+Use `sample_data/sample_research_data.csv`.
 
-- Reliability: `item1`, `item2`, `item3`, `item4`
-- ANOVA: outcome `performance`, group `group`
-- OLS: outcome `performance`, predictors `training`, `motivation`, `support`
-- Logistic regression: outcome `passed`, predictors `training`, `motivation`, `support`
-- Moderation: outcome `performance`, predictor `training`, moderator `support`, control `motivation`
-- Mediation: outcome `performance`, predictor `training`, mediator `motivation`, control `support`
+- OLS: `performance` on `training`, `motivation`, `support`
+- ANOVA: `performance` by `group`
+- logistic regression: `passed` on `training`, `motivation`, `support`
 
-## Production hardening before public release
+### Phase 2 factor sample
 
-- Add authentication, project ownership and role-based access.
-- Store files in encrypted object storage rather than browser session memory.
-- Add a background worker for large bootstraps and exports.
-- Add row and file-size limits by subscription plan.
-- Add automated deletion schedules and institutional data-processing terms.
-- Add survey weights, clustered sampling and multilevel designs in later phases.
-- Connect literature retrieval to Crossref/OpenAlex and verify it through CiteIntegrity.
-- Add an optional LLM interpretation service, while retaining the deterministic statistical engine as the sole source of numerical results.
+Use `sample_data/phase2_factor_sample.csv`.
 
-## Main project structure
+EFA items:
+
+```text
+a1, a2, a3, a4, b1, b2, b3, b4
+```
+
+CFA constructs:
+
+```text
+ConstructA: a1, a2, a3, a4
+ConstructB: b1, b2, b3, b4
+```
+
+SEM path:
+
+```text
+ConstructA -> ConstructB
+```
+
+### Phase 2 longitudinal sample
+
+Use `sample_data/phase2_longitudinal_sample.csv`.
+
+- mixed-effects outcome: `y`
+- fixed predictors: `x`, `time`
+- cluster: `entity`
+- optional random slope: `time`
+- panel entity: `entity`
+- panel time: `time`
+
+## SEM and CFA diagrams
+
+CFA and SEM analyses automatically generate a fitted diagram. The app displays the diagram above the inferential tables and provides a separate PNG download. The diagram is also embedded in the DOCX report and Excel workbook, and included as a PNG in the reproducibility package.
+
+The current SEM module is a latent-variable structural model. A separate observed-variable path-analysis estimator is not yet exposed as its own menu item.
+
+## Project structure
 
 ```text
 app.py                         Streamlit user interface
-statready/dispatch.py          Analysis routing
-statready/methods.py           Statistical methods
+statready/dispatch.py          Analysis routing and automatic descriptives
+statready/methods.py           Phase 1 statistical methods
+statready/phase2.py            Factor, SEM, longitudinal, panel and conditional-process methods
+statready/figures.py           CFA measurement and SEM path-diagram generation
 statready/diagnostics.py       Assumption and diagnostic tests
 statready/treatments.py        Logged data treatments
 statready/profiling.py         Dataset screening
 statready/recommender.py       Objective-to-method rules
 statready/reports.py           DOCX, Excel and ZIP exports
 statready/literature.py        Curated methodological sources
-sample_data/                   Demonstration dataset
-tests/                         Core-engine and export tests
+sample_data/                   Phase 1 and Phase 2 demonstration datasets
+tests/                         Engine and export tests
 ```
 
-## Current limitation
+## Important limitations
 
-Phase 1 is an MVP. It does not yet cover SEM, CFA, EFA, panel data, time series, mixed models, survey-weighted analysis, multiple imputation or advanced causal inference. It also does not infer a conceptual framework reliably from an uploaded image. The structured framework editor is used instead.
-
-
-## Multicollinearity response
-
-OLS models now calculate VIF with an intercept. When any VIF is 10 or higher, the app automatically runs a standardised cross-validated ridge regression as a documented sensitivity model, compares coefficient directions, records the action in the audit trail and warns against isolated interpretation of unstable OLS coefficients. No observations are altered or removed.
-
-
-## Automatic descriptive statistics
-
-Every inferential analysis now begins with descriptive statistics for the exact variables used. The output includes a sample overview, valid and missing counts, mean, standard deviation, median, quartiles, minimum, maximum, skewness and kurtosis for numeric variables. Categorical and low-cardinality variables receive frequency and percentage tables. Group comparison methods also receive descriptive statistics by group. Inferential analyses use the complete-case analytical sample so the descriptive and model sample sizes remain aligned. Users can also select additional demographic or profile variables, which are reported separately using available observations and do not enter or reduce the inferential model sample.
+- CFA and SEM are implemented with an internal maximum-likelihood covariance engine. Complex models, correlated residuals, categorical indicators, multigroup invariance and publication-critical estimates should be confirmed in specialist SEM software.
+- SEM numerical standard errors are approximate and are clearly labelled as such.
+- The mixed-effects implementation does not yet provide small-cluster degrees-of-freedom corrections.
+- The panel module does not yet include dynamic panel GMM, cointegration or cross-sectional-dependence estimators.
+- Multiple imputation, survey weights, ordinal CFA, PLS-SEM and time-series methods remain later development items.
+- Uploaded projects remain session-based until authentication, database and object storage are added.

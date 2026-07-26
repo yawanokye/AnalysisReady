@@ -1,10 +1,9 @@
 services:
   - type: web
-    name: statready-phase1
+    name: statready-ai
     runtime: docker
+    region: frankfurt
     plan: starter
-    autoDeploy: false
+    autoDeployTrigger: commit
     healthCheckPath: /_stcore/health
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.12.4
+    dockerfilePath: ./Dockerfile
