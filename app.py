@@ -126,11 +126,24 @@ def analysis_plan_frame(method_label: str, config: dict) -> pd.DataFrame:
         "Variables": ", ".join(config.get("variables", config.get("items", []))),
         "Additional descriptive profile variables": ", ".join(config.get("profile_variables", [])),
         "Factor items": ", ".join(config.get("items", [])),
-        "Construct measurement model": "; ".join(f"{construct}: {', '.join(items)}" for construct, items in (config.get("construct_map") or {}).items()),
-        "Structural paths": "; ".join(f"{predictor} -> {outcome}" for predictor, outcome in (config.get("paths") or [])),
+        "Construct measurement model": "; ".join(f"{construct} [{(config.get('measurement_modes') or {}).get(construct, 'reflective')}]: {', '.join(items)}" for construct, items in (config.get("construct_map") or {}).items()),
+        "Structural relationships": "; ".join(
+            f"{relation.get('type')}: " + " -> ".join(str(relation.get(key)) for key in ['predictor', 'mediator', 'moderator', 'outcome'] if relation.get(key))
+            for relation in (config.get("structural_relations") or [])
+        ),
+        "Structural paths estimated": "; ".join(f"{predictor} -> {outcome}" for predictor, outcome in (config.get("paths") or [])),
+        "Estimator": config.get("estimator", ""),
+        "Bootstrap resamples": config.get("bootstrap_samples", ""),
+        "PLS weighting scheme": config.get("weighting_scheme", ""),
         "Repeated measurements": ", ".join(config.get("measurements", [])),
         "Subject identifier": config.get("subject_id", ""),
         "Cluster variable": config.get("cluster", ""),
+        "Multilevel outcome family": config.get("outcome_family", ""),
+        "Level-1 predictors": ", ".join(config.get("level1_predictors", [])),
+        "Level-2 predictors": ", ".join(config.get("level2_predictors", [])),
+        "Multilevel centring": config.get("centering", ""),
+        "Random slope": config.get("random_slope", ""),
+        "GEE working correlation": config.get("gee_correlation", ""),
         "Entity identifier": config.get("entity", ""),
         "Time identifier": config.get("time", ""),
         "Panel model choice": config.get("model_choice", ""),
@@ -182,6 +195,133 @@ def parse_structural_paths(text: str) -> tuple[list[tuple[str, str]], str | None
             return [], f"Structural path line {line_number} is incomplete."
         paths.append((predictor, outcome))
     return paths, None
+
+
+def render_construct_builder(method_key: str, numeric_columns: list[str]) -> tuple[dict[str, list[str]], dict[str, str], str | None]:
+    """Structured construct builder with typed names and indicator dropdowns."""
+    saved = st.session_state.study.get(f"{method_key}_construct_definitions", [])
+    default_count = max(1, len(saved) or (3 if method_key in {"sem", "pls_sem"} else 2))
+    count = int(st.number_input(
+        "Number of constructs", min_value=1, max_value=20, value=default_count, step=1,
+        key=f"{method_key}_construct_count",
+    ))
+    definitions = []
+    mapping: dict[str, list[str]] = {}
+    modes: dict[str, str] = {}
+    errors: list[str] = []
+    used_items: dict[str, str] = {}
+    st.caption("Enter each construct name, then select its indicators from the uploaded dataset.")
+    for index in range(count):
+        prior = saved[index] if index < len(saved) else {}
+        with st.expander(f"Construct {index + 1}", expanded=True):
+            name = st.text_input(
+                "Construct name", value=str(prior.get("name", "")),
+                placeholder="Example: Digital competence", key=f"{method_key}_construct_name_{index}",
+            ).strip()
+            mode_options = ["Reflective (Mode A)", "Formative (Mode B)"] if method_key == "pls_sem" else ["Reflective common-factor"]
+            prior_mode = str(prior.get("mode", mode_options[0]))
+            mode = st.selectbox(
+                "Measurement specification", mode_options,
+                index=mode_options.index(prior_mode) if prior_mode in mode_options else 0,
+                key=f"{method_key}_construct_mode_{index}",
+                help="CB-SEM and CFA currently estimate reflective common-factor constructs. PLS-SEM supports reflective Mode A and formative Mode B blocks.",
+            )
+            items = st.multiselect(
+                "Select indicators/items", numeric_columns,
+                default=[item for item in prior.get("items", []) if item in numeric_columns],
+                key=f"{method_key}_construct_items_{index}",
+                help="Items are selected directly from numeric columns in the uploaded dataset.",
+            )
+        definitions.append({"name": name, "mode": mode, "items": items})
+        if not name:
+            errors.append(f"Construct {index + 1} requires a name.")
+            continue
+        if name in mapping:
+            errors.append(f"Construct name '{name}' is repeated.")
+            continue
+        if len(items) < 2:
+            errors.append(f"Construct '{name}' requires at least two indicators.")
+        for item in items:
+            if item in used_items:
+                errors.append(f"Indicator '{item}' is assigned to both '{used_items[item]}' and '{name}'.")
+            used_items[item] = name
+        mapping[name] = items
+        modes[name] = "formative" if mode.startswith("Formative") else "reflective"
+    st.session_state.study[f"{method_key}_construct_definitions"] = definitions
+    return mapping, modes, errors[0] if errors else None
+
+
+def _construct_select(label: str, constructs: list[str], key: str, default: str | None = None) -> str | None:
+    options = ["<select>"] + constructs
+    chosen = default if default in constructs else options[0]
+    selected = st.selectbox(label, options, index=options.index(chosen), key=key)
+    return None if selected == "<select>" else selected
+
+
+def render_structural_relation_builder(
+    method_key: str, constructs: list[str]
+) -> tuple[list[dict], list[tuple[str, str]], list[dict], str | None]:
+    """Build direct, mediation and moderation relations from entered constructs."""
+    if len(constructs) < 2:
+        st.info("Enter at least two valid constructs before defining structural relationships.")
+        return [], [], [], "At least two constructs are required for structural relationships."
+    saved = st.session_state.study.get(f"{method_key}_structural_relations", [])
+    default_count = max(1, len(saved) or 1)
+    count = int(st.number_input(
+        "Number of structural relationships", min_value=1, max_value=30, value=default_count, step=1,
+        key=f"{method_key}_relation_count",
+    ))
+    relations: list[dict] = []
+    paths: list[tuple[str, str]] = []
+    moderations: list[dict] = []
+    errors: list[str] = []
+    for index in range(count):
+        prior = saved[index] if index < len(saved) else {}
+        relation_type = st.selectbox(
+            f"Relationship {index + 1} type", ["Direct", "Mediator", "Moderator"],
+            index=["Direct", "Mediator", "Moderator"].index(prior.get("type", "Direct")) if prior.get("type", "Direct") in ["Direct", "Mediator", "Moderator"] else 0,
+            key=f"{method_key}_relation_type_{index}",
+        )
+        with st.expander(f"Relationship {index + 1}: {relation_type}", expanded=True):
+            predictor = _construct_select("Predictor construct", constructs, f"{method_key}_relation_predictor_{index}", prior.get("predictor"))
+            if relation_type == "Direct":
+                outcome = _construct_select("Outcome construct", constructs, f"{method_key}_relation_outcome_{index}", prior.get("outcome"))
+                relation = {"type": relation_type, "predictor": predictor, "outcome": outcome}
+                if predictor and outcome:
+                    paths.append((predictor, outcome))
+            elif relation_type == "Mediator":
+                mediator = _construct_select("Mediator construct", constructs, f"{method_key}_relation_mediator_{index}", prior.get("mediator"))
+                outcome = _construct_select("Outcome construct", constructs, f"{method_key}_relation_outcome_{index}", prior.get("outcome"))
+                include_direct = st.checkbox(
+                    "Also estimate the direct predictor-to-outcome path", value=bool(prior.get("include_direct", True)),
+                    key=f"{method_key}_relation_direct_{index}",
+                )
+                relation = {"type": relation_type, "predictor": predictor, "mediator": mediator, "outcome": outcome, "include_direct": include_direct}
+                if predictor and mediator and outcome:
+                    paths.extend([(predictor, mediator), (mediator, outcome)])
+                    if include_direct:
+                        paths.append((predictor, outcome))
+            else:
+                moderator = _construct_select("Moderator construct", constructs, f"{method_key}_relation_moderator_{index}", prior.get("moderator"))
+                outcome = _construct_select("Outcome construct", constructs, f"{method_key}_relation_outcome_{index}", prior.get("outcome"))
+                relation = {"type": relation_type, "predictor": predictor, "moderator": moderator, "outcome": outcome}
+                if predictor and moderator and outcome:
+                    paths.extend([(predictor, outcome), (moderator, outcome)])
+                    moderations.append({"predictor": predictor, "moderator": moderator, "outcome": outcome})
+            relations.append(relation)
+            selected = [value for key, value in relation.items() if key in {"predictor", "mediator", "moderator", "outcome"} and value]
+            if len(selected) != len(set(selected)):
+                errors.append(f"Relationship {index + 1} must use different constructs for its roles.")
+            if not predictor or not relation.get("outcome"):
+                errors.append(f"Relationship {index + 1} is incomplete.")
+            if relation_type == "Mediator" and not relation.get("mediator"):
+                errors.append(f"Relationship {index + 1} requires a mediator construct.")
+            if relation_type == "Moderator" and not relation.get("moderator"):
+                errors.append(f"Relationship {index + 1} requires a moderator construct.")
+    st.session_state.study[f"{method_key}_structural_relations"] = relations
+    paths = list(dict.fromkeys(paths))
+    moderations = [dict(item) for item in {tuple(sorted(item.items())) for item in moderations}]
+    return relations, paths, moderations, errors[0] if errors else None
 
 
 def render_method_configuration(method_key: str, columns: list[str], numeric_columns: list[str]) -> dict:
@@ -238,36 +378,67 @@ def render_method_configuration(method_key: str, columns: list[str], numeric_col
         config["rotation"] = st.selectbox("Rotation", ["varimax", "none"])
         config["parallel_iterations"] = int(st.number_input("Parallel-analysis simulations", min_value=50, max_value=500, value=100, step=50))
         config["random_state"] = int(st.number_input("Random seed", min_value=0, max_value=999999, value=42, step=1, key="efa_seed"))
-    elif method_key in {"cfa", "sem"}:
-        default_spec = st.session_state.study.get(f"{method_key}_construct_spec", "")
-        construct_text = st.text_area(
-            "Construct measurement specification", value=default_spec, height=150,
-            placeholder="DigitalCompetence: dc1, dc2, dc3\nTeachingEffectiveness: te1, te2, te3",
-            help="Enter one construct per line. Every item must match a numeric dataset column and can appear only once.",
-            key=f"{method_key}_construct_text",
-        )
-        st.session_state.study[f"{method_key}_construct_spec"] = construct_text
-        config["construct_map"], config["construct_parse_error"] = parse_construct_map(construct_text, numeric_columns)
-        if method_key == "sem":
-            path_text = st.text_area(
-                "Structural paths", value=st.session_state.study.get("sem_paths", ""), height=120,
-                placeholder="DigitalCompetence -> TeachingEffectiveness",
-                help="Enter one directed path per line. Phase 2 supports acyclic structural models.",
-                key="sem_path_text",
+    elif method_key in {"cfa", "sem", "pls_sem"}:
+        st.markdown("#### Construct measurement specification")
+        config["construct_map"], config["measurement_modes"], config["construct_parse_error"] = render_construct_builder(method_key, numeric_columns)
+        if method_key in {"sem", "pls_sem"}:
+            st.markdown("#### Structural paths")
+            config["structural_relations"], config["paths"], config["moderations"], config["path_parse_error"] = render_structural_relation_builder(method_key, list(config["construct_map"]))
+            config["unsupported_moderations"] = config["moderations"] if method_key == "sem" else []
+        if method_key in {"cfa", "sem"}:
+            config["estimator"] = st.selectbox(
+                "Covariance estimation method", ["ML", "GLS", "ULS", "DWLS"],
+                help="ML is appropriate for approximately continuous, normally distributed indicators. DWLS is often preferred for ordinal or non-normal indicators. GLS and ULS provide alternative covariance fitting objectives.",
+                key=f"{method_key}_estimator",
             )
-            st.session_state.study["sem_paths"] = path_text
-            config["paths"], config["path_parse_error"] = parse_structural_paths(path_text)
+        else:
+            config["weighting_scheme"] = st.selectbox(
+                "PLS inner weighting scheme", ["Path", "Centroid", "Factorial"],
+                help="Path weighting is the default for recursive structural models. Centroid uses correlation signs, while factorial uses the correlations themselves.",
+                key="pls_weighting_scheme",
+            )
+            config["bootstrap_samples"] = int(st.number_input("Bootstrap resamples", min_value=100, max_value=5000, value=500, step=100, key="pls_bootstrap"))
+            config["max_iter"] = int(st.number_input("Maximum PLS iterations", min_value=50, max_value=2000, value=300, step=50, key="pls_iterations"))
+            config["tolerance"] = float(st.selectbox("Convergence tolerance", [1e-5, 1e-6, 1e-7, 1e-8], index=2, key="pls_tolerance"))
         config["random_state"] = int(st.number_input("Random seed", min_value=0, max_value=999999, value=42, step=1, key=f"{method_key}_seed"))
     elif method_key == "repeated_measures":
         config["measurements"] = st.multiselect("Repeated measurement columns", numeric_columns)
         config["subject_id"] = variable_selector("Subject identifier (optional)", columns, "rm_subject", allow_none=True, default=next((v for v in roles["Identifier"] if v in columns), None))
-    elif method_key == "mixed_effects":
-        config["outcome"] = variable_selector("Continuous outcome", numeric_columns, "mixed_outcome", default=default_outcome)
-        config["cluster"] = variable_selector("Cluster or subject identifier", columns, "mixed_cluster", default=next((v for v in roles["Cluster"] + roles["Group"] + roles["Identifier"] if v in columns), None))
+    elif method_key == "multilevel":
+        config["outcome_family"] = st.selectbox(
+            "Outcome family", ["Continuous", "Binary", "Count"],
+            help="Continuous outcomes may use ML, REML or robust GEE. Binary and count outcomes use population-average robust GEE in this build.",
+            key="ml_outcome_family",
+        )
+        outcome_options = columns if config["outcome_family"] == "Binary" else numeric_columns
+        config["outcome"] = variable_selector(
+            f"{config['outcome_family']} outcome", outcome_options, "ml_outcome", default=default_outcome,
+        )
+        config["cluster"] = variable_selector("Level-2 cluster identifier", columns, "ml_cluster", default=next((v for v in roles["Cluster"] + roles["Group"] + roles["Identifier"] if v in columns), None))
         candidates = [c for c in numeric_columns if c != config["outcome"]]
-        config["predictors"] = st.multiselect("Fixed-effect predictors", candidates, default=[v for v in default_predictors if v in candidates])
-        config["random_slope"] = variable_selector("Optional random-slope variable", candidates, "mixed_slope", allow_none=True)
-        config["reml"] = st.checkbox("Use restricted maximum likelihood", value=True)
+        config["level1_predictors"] = st.multiselect(
+            "Level-1 predictors that vary within clusters", candidates,
+            default=[v for v in default_predictors if v in candidates], key="ml_level1",
+        )
+        remaining = [c for c in candidates if c not in config["level1_predictors"]]
+        config["level2_predictors"] = st.multiselect(
+            "Level-2 predictors that are constant within clusters", remaining, key="ml_level2",
+        )
+        config["centering"] = st.selectbox(
+            "Predictor centring", ["Group-mean with contextual effect", "Grand-mean", "None"],
+            help="Group-mean centring separates within-cluster and between-cluster effects for level-1 predictors.",
+        )
+        estimator_options = ["REML", "ML", "GEE robust"] if config["outcome_family"] == "Continuous" else ["GEE robust"]
+        config["estimator"] = st.selectbox("Estimation method", estimator_options, key="ml_estimator")
+        if config["estimator"] in {"REML", "ML"}:
+            config["random_slope"] = variable_selector(
+                "Optional random-slope level-1 predictor", config["level1_predictors"], "ml_random_slope", allow_none=True,
+            )
+            config["optimizer"] = st.selectbox("Mixed-model optimiser", ["lbfgs", "powell", "cg"], key="ml_optimizer")
+        else:
+            config["random_slope"] = None
+            config["optimizer"] = "lbfgs"
+        config["gee_correlation"] = st.selectbox("GEE working correlation", ["Exchangeable", "Independence", "AR(1)"], key="ml_gee_corr")
     elif method_key == "panel":
         config["outcome"] = variable_selector("Continuous outcome", numeric_columns, "panel_outcome", default=default_outcome)
         config["entity"] = variable_selector("Entity identifier", columns, "panel_entity", default=next((v for v in roles["Entity"] + roles["Identifier"] if v in columns), None))
@@ -326,8 +497,10 @@ def validate_config(method_key: str, config: dict) -> str | None:
         "efa": ["items"],
         "cfa": ["construct_map"],
         "sem": ["construct_map", "paths"],
+        "pls_sem": ["construct_map", "paths"],
         "repeated_measures": ["measurements"],
         "mixed_effects": ["outcome", "predictors", "cluster"],
+        "multilevel": ["outcome", "cluster"],
         "panel": ["outcome", "predictors", "entity", "time"],
         "advanced_moderation": ["outcome", "predictor", "moderator"],
         "parallel_mediation": ["outcome", "predictor", "mediators"],
@@ -345,14 +518,18 @@ def validate_config(method_key: str, config: dict) -> str | None:
         return "Select two different categorical variables."
     if method_key == "efa" and len(config.get("items", [])) < 3:
         return "Select at least three observed items for EFA."
-    if method_key in {"cfa", "sem"} and config.get("construct_parse_error"):
+    if method_key in {"cfa", "sem", "pls_sem"} and config.get("construct_parse_error"):
         return config["construct_parse_error"]
-    if method_key == "sem" and config.get("path_parse_error"):
+    if method_key in {"sem", "pls_sem"} and config.get("path_parse_error"):
         return config["path_parse_error"]
     if method_key == "repeated_measures" and len(config.get("measurements", [])) < 2:
         return "Select at least two repeated measurements."
     if method_key == "parallel_mediation" and len(config.get("mediators", [])) < 2:
         return "Select at least two parallel mediators."
+    if method_key == "multilevel" and not (config.get("level1_predictors") or config.get("level2_predictors")):
+        return "Select at least one level-1 or level-2 predictor."
+    if method_key == "multilevel" and config.get("random_slope") and config.get("random_slope") not in (config.get("level1_predictors") or []):
+        return "The random-slope variable must be selected as a level-1 predictor."
     if method_key == "panel" and config.get("entity") == config.get("time"):
         return "Entity and time identifiers must be different variables."
     return None
@@ -361,7 +538,7 @@ def validate_config(method_key: str, config: dict) -> str | None:
 init_state()
 
 st.title("StatReady AI")
-st.caption("Phase 2: objective-aligned statistics, latent-variable analysis, longitudinal models, diagnostics and reproducible reporting")
+st.caption("Phase 2.2: structured CB-SEM and PLS-SEM, multilevel mixed models and robust GEE, diagnostics and reproducible reporting")
 st.info("The app never changes data merely to obtain significance. It preserves the original dataset, records every treatment, uses robust or alternative methods where justified, and keeps sensitivity results visible.")
 
 study_tab, data_tab, framework_tab, analysis_tab, results_tab = st.tabs([
@@ -557,7 +734,9 @@ with analysis_tab:
         config = render_method_configuration(selected_key, columns, numeric_columns)
         config["alpha"] = float(config.get("alpha", st.session_state.study.get("alpha", 0.05)))
         if selected_key in {"cfa", "sem"}:
-            st.warning("Phase 2 CFA and SEM use the internal maximum-likelihood covariance engine. Confirm publication-critical models in specialist SEM software, especially when using complex specifications or smaller samples.")
+            st.warning("CFA and covariance-based SEM use an internal covariance-fitting engine with ML, GLS, ULS and DWLS objectives. Confirm publication-critical models in specialist SEM software, especially for ordinal indicators, complex models or small samples.")
+        if selected_key == "pls_sem":
+            st.warning("The internal PLS-SEM engine supports reflective and formative blocks, mediation and two-stage latent-score moderation. Confirm publication-critical estimates in specialist PLS-SEM software.")
 
         st.markdown("#### Pre-analysis confirmation")
         preview_plan = analysis_plan_frame(selected_label, config)
@@ -633,7 +812,7 @@ with results_tab:
         if inferential_tables:
             st.markdown("### Inferential results")
             for name, table in inferential_tables.items():
-                with st.expander(name, expanded=name in {"Selected coefficient table", "Test result", "Model fit", "Indirect effect", "Multicollinearity action summary", "Ridge sensitivity model fit", "CFA fit indices", "SEM fit indices", "Structural path estimates", "Panel model decision", "Repeated-measures ANOVA", "Fixed effects", "Parallel indirect effects", "Conditional indirect effects"}):
+                with st.expander(name, expanded=name in {"Selected coefficient table", "Test result", "Model fit", "Indirect effect", "Multicollinearity action summary", "Ridge sensitivity model fit", "CFA fit indices", "SEM fit indices", "Structural path estimates", "PLS-SEM model summary", "PLS structural path estimates", "Construct reliability and convergent validity", "HTMT discriminant validity", "Multilevel model fit and variance partition", "Multilevel fixed effects", "Panel model decision", "Repeated-measures ANOVA", "Fixed effects", "Parallel indirect effects", "Conditional indirect effects"}):
                     st.dataframe(table, use_container_width=True, hide_index=True)
 
         st.markdown("### Diagnostics and assumptions")
@@ -680,4 +859,4 @@ with results_tab:
             st.code(result.reproducible_code, language="python")
 
 st.divider()
-st.caption("StatReady AI Phase 2 | Original data preserved | Advanced models audited | Alternatives documented | No significance-seeking data manipulation")
+st.caption("StatReady AI Phase 2.2 | Original data preserved | CB-SEM, PLS-SEM, mixed models and robust GEE audited | Alternatives documented")
