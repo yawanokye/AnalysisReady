@@ -28,6 +28,7 @@ class AnalysisResult:
     method: str
     summary: str
     tables: dict[str, pd.DataFrame] = field(default_factory=dict)
+    figures: dict[str, bytes] = field(default_factory=dict)
     diagnostics: pd.DataFrame = field(default_factory=pd.DataFrame)
     metadata: dict[str, Any] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)

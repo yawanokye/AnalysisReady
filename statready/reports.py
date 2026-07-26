@@ -10,6 +10,7 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Inches, Pt
 from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.drawing.image import Image as XLImage
 from openpyxl.utils import get_column_letter
 
 from .literature import references_for_method
@@ -46,6 +47,18 @@ DISPLAY_COLUMN_NAMES = {
     "ridge_standardized_coefficient": "Ridge standardised coefficient",
     "direction_agrees": "Direction agrees",
     "data_values_changed": "Data values changed",
+    "degrees_of_freedom": "Degrees of freedom",
+    "chi_square": "Chi-square",
+    "chi_square_p": "Chi-square p-value",
+    "standardized_loading": "Standardised loading",
+    "standardized_estimate": "Standardised estimate",
+    "composite_reliability": "Composite reliability",
+    "average_variance_extracted": "Average variance extracted",
+    "greenhouse_geisser_epsilon": "Greenhouse-Geisser epsilon",
+    "greenhouse_geisser_corrected_p": "GG corrected p-value",
+    "intraclass_correlation": "Intraclass correlation",
+    "hausman_chi_square": "Hausman chi-square",
+    "hausman_p": "Hausman p-value",
 }
 
 
@@ -121,7 +134,7 @@ def build_docx_report(
 
     title = document.add_heading(study.get("title") or "StatReady Analysis Report", level=0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    subtitle = document.add_paragraph("Phase 1 statistical analysis, diagnostics and reproducibility report")
+    subtitle = document.add_paragraph("Phase 2 statistical analysis, advanced models, diagnostics and reproducibility report")
     subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     document.add_heading("Study specification", level=1)
@@ -195,6 +208,21 @@ def build_docx_report(
         document.add_heading("Warnings", level=2)
         for warning in result.warnings:
             document.add_paragraph(warning, style="List Bullet")
+
+    if result.figures:
+        document.add_heading("Path and measurement diagram", level=1)
+        document.add_paragraph(
+            "The diagram presents the prespecified model and the standardised estimates obtained from the fitted analysis. "
+            "It should be interpreted together with the coefficient tables, diagnostics and fit indices."
+        )
+        for figure_name, figure_bytes in result.figures.items():
+            paragraph = document.add_paragraph()
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            paragraph.add_run().add_picture(BytesIO(figure_bytes), width=Inches(6.8))
+            caption = document.add_paragraph(f"Figure: {figure_name}")
+            caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            if caption.runs:
+                caption.runs[0].italic = True
 
     for name, table in inferential_tables.items():
         document.add_heading(name, level=2)
@@ -281,6 +309,24 @@ def build_excel_report(
             "Ridge sensitivity coefficients": "Ridge_Coefficients",
             "Ridge sensitivity model fit": "Ridge_Fit",
             "OLS-Ridge coefficient comparison": "OLS_Ridge_Compare",
+            "Factor loadings": "EFA_Loadings",
+            "Factor variance explained": "EFA_Variance",
+            "Parallel analysis": "EFA_Parallel",
+            "KMO by item": "EFA_KMO",
+            "CFA fit indices": "CFA_Fit",
+            "CFA standardised loadings": "CFA_Loadings",
+            "Construct reliability and validity": "CFA_Reliability",
+            "SEM fit indices": "SEM_Fit",
+            "Structural path estimates": "SEM_Paths",
+            "SEM standardised loadings": "SEM_Loadings",
+            "Repeated-measures ANOVA": "RM_ANOVA",
+            "Holm-adjusted pairwise comparisons": "RM_Pairwise",
+            "Fixed effects": "Mixed_Fixed",
+            "Mixed-model fit": "Mixed_Fit",
+            "Panel model decision": "Panel_Decision",
+            "Selected panel coefficients": "Panel_Selected",
+            "Parallel indirect effects": "Parallel_Indirect",
+            "Conditional indirect effects": "Conditional_Indirect",
             "Model fit": "Model_Fit",
         }
         for idx, (name, table) in enumerate(result.tables.items(), start=1):
@@ -289,6 +335,25 @@ def build_excel_report(
                 safe_name = "".join(ch for ch in name if ch not in r"[]:*?/\\")[:25]
             sheet = f"R{idx}_{safe_name}"[:31]
             table.to_excel(writer, sheet_name=sheet, index=False)
+
+        for figure_index, (figure_name, figure_bytes) in enumerate(result.figures.items(), start=1):
+            base_name = "SEM_Diagram" if "SEM" in figure_name else "CFA_Diagram"
+            sheet_name = (base_name if figure_index == 1 else f"{base_name}_{figure_index}")[:31]
+            pd.DataFrame({
+                "Diagram": [figure_name],
+                "Interpretation": ["Standardised estimates. Interpret together with the path/loading tables and model-fit diagnostics."],
+            }).to_excel(writer, sheet_name=sheet_name, index=False)
+            worksheet = writer.sheets[sheet_name]
+            image = XLImage(BytesIO(figure_bytes))
+            max_width = 1180
+            if image.width > max_width:
+                scale = max_width / image.width
+                image.width = int(image.width * scale)
+                image.height = int(image.height * scale)
+            worksheet.add_image(image, "A4")
+            worksheet.column_dimensions["A"].width = 34
+            worksheet.column_dimensions["B"].width = 72
+            worksheet.row_dimensions[2].height = 36
 
         header_fill = PatternFill("solid", fgColor="17365D")
         header_font = Font(color="FFFFFF", bold=True)
@@ -366,5 +431,8 @@ def build_reproducibility_package(
         archive.writestr("Treatment_Audit.csv", audit_csv)
         archive.writestr("Methodological_References.csv", references_csv)
         archive.writestr("Reproduce_Analysis.py", result.reproducible_code)
+        for figure_name, figure_bytes in result.figures.items():
+            safe_name = "".join(ch if ch.isalnum() else "_" for ch in figure_name).strip("_")
+            archive.writestr(f"Figures/{safe_name}.png", figure_bytes)
         archive.writestr("Analysis_Metadata.json", json.dumps(metadata, indent=2, default=str))
     return package.getvalue()

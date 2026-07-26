@@ -17,6 +17,18 @@ from .methods import (
     one_way_anova,
     paired_t_test,
 )
+from .figures import attach_latent_variable_figures
+from .phase2 import (
+    exploratory_factor_analysis,
+    confirmatory_factor_analysis,
+    structural_equation_model,
+    repeated_measures_anova,
+    mixed_effects_model,
+    panel_data_analysis,
+    advanced_moderation_analysis,
+    parallel_mediation_analysis,
+    moderated_mediation_analysis,
+)
 
 
 def _analysis_variables(method_key: str, config: dict[str, Any]) -> list[str]:
@@ -38,6 +50,15 @@ def _analysis_variables(method_key: str, config: dict[str, Any]) -> list[str]:
             config.get("outcome"), config.get("predictor"), config.get("mediator"),
             *(config.get("controls") or []),
         ],
+        "efa": config.get("items") or [],
+        "cfa": [item for items in (config.get("construct_map") or {}).values() for item in items],
+        "sem": [item for items in (config.get("construct_map") or {}).values() for item in items],
+        "repeated_measures": config.get("measurements") or [],
+        "mixed_effects": [config.get("outcome"), config.get("cluster"), *(config.get("predictors") or []), config.get("random_slope")],
+        "panel": [config.get("outcome"), config.get("entity"), config.get("time"), *(config.get("predictors") or [])],
+        "advanced_moderation": [config.get("outcome"), config.get("predictor"), config.get("moderator"), *(config.get("controls") or [])],
+        "parallel_mediation": [config.get("outcome"), config.get("predictor"), *(config.get("mediators") or []), *(config.get("controls") or [])],
+        "moderated_mediation": [config.get("outcome"), config.get("predictor"), config.get("mediator"), config.get("moderator"), *(config.get("controls") or [])],
     }
     return list(dict.fromkeys(value for value in mappings.get(method_key, []) if value))
 
@@ -137,7 +158,43 @@ def run_analysis(df: pd.DataFrame, method_key: str, config: dict[str, Any]):
             int(config.get("bootstrap_samples", 1000)),
             int(config.get("random_state", 42)),
         )
+    elif method_key == "efa":
+        result = exploratory_factor_analysis(
+            df, config["items"], config.get("n_factors"), config.get("rotation", "varimax"),
+            int(config.get("parallel_iterations", 100)), int(config.get("random_state", 42)), alpha,
+        )
+    elif method_key == "cfa":
+        result = confirmatory_factor_analysis(df, config["construct_map"], alpha, int(config.get("random_state", 42)))
+    elif method_key == "sem":
+        result = structural_equation_model(df, config["construct_map"], config["paths"], alpha, int(config.get("random_state", 42)))
+    elif method_key == "repeated_measures":
+        result = repeated_measures_anova(df, config["measurements"], config.get("subject_id"), alpha)
+    elif method_key == "mixed_effects":
+        result = mixed_effects_model(
+            df, config["outcome"], config["predictors"], config["cluster"],
+            config.get("random_slope"), bool(config.get("reml", True)), alpha,
+        )
+    elif method_key == "panel":
+        result = panel_data_analysis(
+            df, config["outcome"], config["predictors"], config["entity"], config["time"],
+            config.get("model_choice", "automatic"), bool(config.get("include_time_effects", False)), alpha,
+        )
+    elif method_key == "advanced_moderation":
+        result = advanced_moderation_analysis(
+            df, config["outcome"], config["predictor"], config["moderator"], config.get("controls") or [], alpha,
+        )
+    elif method_key == "parallel_mediation":
+        result = parallel_mediation_analysis(
+            df, config["outcome"], config["predictor"], config["mediators"], config.get("controls") or [], alpha,
+            int(config.get("bootstrap_samples", 1000)), int(config.get("random_state", 42)),
+        )
+    elif method_key == "moderated_mediation":
+        result = moderated_mediation_analysis(
+            df, config["outcome"], config["predictor"], config["mediator"], config["moderator"],
+            config.get("controls") or [], alpha, int(config.get("bootstrap_samples", 1000)), int(config.get("random_state", 42)),
+        )
     else:
         raise ValueError(f"Unknown method: {method_key}")
 
+    result = attach_latent_variable_figures(result)
     return _attach_automatic_descriptives(df, method_key, config, result)

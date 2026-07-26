@@ -70,6 +70,54 @@ CURATED_REFERENCES = [
         "doi": "10.1111/j.2517-6161.1969.tb00796.x",
         "supports": "RESET testing for functional-form and specification concerns.",
     },
+    {
+        "topic": "exploratory_factor_analysis",
+        "citation": "Fabrigar, L. R., Wegener, D. T., MacCallum, R. C., & Strahan, E. J. (1999). Evaluating the use of exploratory factor analysis in psychological research. Psychological Methods, 4(3), 272–299.",
+        "doi": "10.1037/1082-989X.4.3.272",
+        "supports": "Factor extraction, retention, rotation and interpretation in exploratory factor analysis.",
+    },
+    {
+        "topic": "parallel_analysis",
+        "citation": "Horn, J. L. (1965). A rationale and test for the number of factors in factor analysis. Psychometrika, 30, 179–185.",
+        "doi": "10.1007/BF02289447",
+        "supports": "Parallel analysis for empirical factor retention.",
+    },
+    {
+        "topic": "cfa_sem",
+        "citation": "Brown, T. A. (2015). Confirmatory Factor Analysis for Applied Research (2nd ed.). Guilford Press.",
+        "doi": "",
+        "supports": "Specification, estimation and evaluation of confirmatory factor models.",
+    },
+    {
+        "topic": "sem_fit",
+        "citation": "Hu, L., & Bentler, P. M. (1999). Cutoff criteria for fit indexes in covariance structure analysis: Conventional criteria versus new alternatives. Structural Equation Modeling, 6(1), 1–55.",
+        "doi": "10.1080/10705519909540118",
+        "supports": "Joint interpretation of CFI, TLI, RMSEA and SRMR in covariance-structure models.",
+    },
+    {
+        "topic": "repeated_measures",
+        "citation": "Greenhouse, S. W., & Geisser, S. (1959). On methods in the analysis of profile data. Psychometrika, 24, 95–112.",
+        "doi": "10.1007/BF02289823",
+        "supports": "Greenhouse–Geisser correction when repeated-measures sphericity is not supported.",
+    },
+    {
+        "topic": "mixed_effects",
+        "citation": "Laird, N. M., & Ware, J. H. (1982). Random-effects models for longitudinal data. Biometrics, 38(4), 963–974.",
+        "doi": "10.2307/2529876",
+        "supports": "Random-effects modelling for clustered and longitudinal observations.",
+    },
+    {
+        "topic": "panel_data",
+        "citation": "Wooldridge, J. M. (2010). Econometric Analysis of Cross Section and Panel Data (2nd ed.). MIT Press.",
+        "doi": "",
+        "supports": "Pooled, fixed-effects and random-effects panel-data modelling and specification decisions.",
+    },
+    {
+        "topic": "conditional_process",
+        "citation": "Hayes, A. F. (2022). Introduction to Mediation, Moderation, and Conditional Process Analysis (3rd ed.). Guilford Press.",
+        "doi": "",
+        "supports": "Simple slopes, Johnson–Neyman analysis, multiple mediation and moderated mediation.",
+    },
 ]
 
 
@@ -87,6 +135,18 @@ def references_for_method(method: str, diagnostics: pd.DataFrame | None = None) 
         topics.add("reliability")
     if "mediation" in method_lower:
         topics.update({"mediation", "bootstrap"})
+    if "parallel multiple mediation" in method_lower or "moderated mediation" in method_lower or "advanced moderated" in method_lower:
+        topics.update({"conditional_process", "bootstrap"})
+    if "exploratory factor" in method_lower:
+        topics.update({"exploratory_factor_analysis", "parallel_analysis"})
+    if "confirmatory factor" in method_lower or "structural equation" in method_lower:
+        topics.update({"cfa_sem", "sem_fit"})
+    if "repeated-measures" in method_lower:
+        topics.add("repeated_measures")
+    if "mixed-effects" in method_lower:
+        topics.add("mixed_effects")
+    if "fixed-effects" in method_lower or "random-effects" in method_lower or "panel" in method_lower:
+        topics.add("panel_data")
     if "regression" in method_lower or "ols" in method_lower:
         topics.update({"regression_diagnostics", "model_specification"})
     if diagnostics is not None and not diagnostics.empty:

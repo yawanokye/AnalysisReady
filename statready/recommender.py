@@ -15,6 +15,15 @@ METHOD_LABELS = {
     "logistic": "Binary logistic regression",
     "moderation": "Moderated multiple regression",
     "mediation": "Bootstrap mediation analysis",
+    "efa": "Exploratory factor analysis",
+    "cfa": "Confirmatory factor analysis",
+    "sem": "Covariance-based structural equation model",
+    "repeated_measures": "Repeated-measures ANOVA",
+    "mixed_effects": "Linear mixed-effects model",
+    "panel": "Panel-data model selection",
+    "advanced_moderation": "Advanced moderation with simple slopes",
+    "parallel_mediation": "Parallel multiple mediation",
+    "moderated_mediation": "First-stage moderated mediation",
 }
 
 
@@ -27,7 +36,34 @@ def recommend_method(
 ) -> dict[str, str]:
     text = f"{objective} {hypothesis}".lower()
 
-    if re.search(r"mediat|indirect effect", text):
+    if re.search(r"structural equation|\bsem\b|latent path|latent variable model", text):
+        key = "sem"
+        reason = "The wording specifies a latent-variable structural model with linked measurement and structural relationships."
+    elif re.search(r"confirmatory factor|\bcfa\b|measurement model|construct validity", text):
+        key = "cfa"
+        reason = "The objective concerns confirmation of a prespecified latent measurement structure."
+    elif re.search(r"exploratory factor|\befa\b|factor structure|dimension reduction|underlying dimensions", text):
+        key = "efa"
+        reason = "The objective seeks to discover the underlying dimensional structure of a multi-item set."
+    elif re.search(r"panel data|fixed effects|random effects|longitudinal firms|entity and time", text):
+        key = "panel"
+        reason = "The data appear to contain repeated entity observations across time."
+    elif re.search(r"mixed effects|multilevel|hierarchical|nested|clustered observations|random intercept|random slope", text):
+        key = "mixed_effects"
+        reason = "The objective involves observations nested within clusters or repeated within units."
+    elif re.search(r"repeated measures|within-subject|multiple time points|three time points", text):
+        key = "repeated_measures"
+        reason = "The same units are measured across more than two conditions or occasions."
+    elif re.search(r"moderated mediation|conditional indirect|index of moderated mediation", text):
+        key = "moderated_mediation"
+        reason = "The objective specifies that an indirect effect changes across levels of a moderator."
+    elif re.search(r"parallel mediation|multiple mediators|mediators", text) and re.search(r"mediat|indirect effect", text):
+        key = "parallel_mediation"
+        reason = "The objective specifies more than one mediator operating in parallel."
+    elif re.search(r"johnson.?neyman|simple slopes|conditional effect", text):
+        key = "advanced_moderation"
+        reason = "The objective requires conditional effects and probing of an interaction."
+    elif re.search(r"mediat|indirect effect", text):
         key = "mediation"
         reason = "The wording specifies an indirect or mediating relationship."
     elif re.search(r"moderat|interaction effect", text):
