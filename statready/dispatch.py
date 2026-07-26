@@ -305,5 +305,7 @@ def run_analysis(df: pd.DataFrame, method_key: str, config: dict[str, Any]):
         raise ValueError(f"Unknown method: {method_key}")
 
     result = _attach_specified_relation_effects(result, config.get("structural_relations"), alpha)
+    result.metadata["diagram_settings"] = config.get("diagram_settings") or {}
+    result.metadata["structural_relations"] = config.get("structural_relations") or []
     result = attach_latent_variable_figures(result)
     return _attach_automatic_descriptives(df, method_key, config, result)
