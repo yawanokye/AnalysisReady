@@ -441,3 +441,115 @@ def test_dispatch_respects_transparent_high_resolution_diagram():
     assert image.mode == "RGBA"
     assert image.width > 1600
     assert result.metadata["diagram_settings"]["layout"] == "Top to bottom"
+
+
+def test_phase24_network_edge_list_complete_outputs():
+    from statready.network_analysis import network_analysis
+    frame = pd.DataFrame({
+        "source": ["A", "A", "B", "C", "D", "D", "E"],
+        "target": ["B", "C", "C", "D", "A", "C", "A"],
+        "weight": [2.0, 1.0, 3.0, 1.0, 2.0, 2.0, 1.0],
+    })
+    result = network_analysis(frame, {
+        "network_input": "Edge list", "source": "source", "target": "target",
+        "weight": "weight", "directed": False, "layout": "Spring",
+        "random_graph_iterations": 10, "random_state": 42,
+    })
+    assert "Network summary measures" in result.tables
+    assert "Node centrality and community measures" in result.tables
+    assert "Paper-ready methods narrative" in result.tables
+    assert "Network reporting checklist" in result.tables
+    assert len(result.figures) >= 5
+    assert result.metadata["interactive_network_html"].startswith("<!doctype html>")
+    assert set(["degree", "strength", "betweenness", "closeness", "pagerank", "community"]).issubset(
+        result.tables["Node centrality and community measures"].columns
+    )
+
+
+def test_phase24_correlation_network_stability_and_dispatch():
+    import numpy as np
+    rng = np.random.default_rng(44)
+    latent = rng.normal(size=120)
+    frame = pd.DataFrame({
+        "stress": latent + rng.normal(scale=.6, size=120),
+        "anxiety": latent + rng.normal(scale=.6, size=120),
+        "sleep": -0.5 * latent + rng.normal(size=120),
+        "support": rng.normal(size=120),
+        "performance": -0.4 * latent + .3 * rng.normal(size=120),
+    })
+    result = run_analysis(frame, "network", {
+        "network_input": "Correlation or partial-correlation network",
+        "variables": list(frame.columns), "network_estimator": "Pearson correlation",
+        "edge_threshold": 0.10, "retain_negative": True, "bootstrap_samples": 20,
+        "layout": "Circular", "random_graph_iterations": 10, "random_state": 42,
+        "group_variable": None, "group_values": [], "permutation_samples": 0,
+        "alpha": 0.05,
+    })
+    assert "Bootstrap edge stability" in result.tables
+    assert result.metadata["descriptive_statistics_included"] is True
+    assert "Adjacency heatmap" in result.figures
+
+
+def test_phase24_agent_completes_network_and_regression_specs():
+    import numpy as np
+    from statready.agent import build_auto_specification
+    rng = np.random.default_rng(9)
+    frame = pd.DataFrame({
+        "training": rng.normal(size=80), "motivation": rng.normal(size=80),
+        "performance": rng.normal(size=80), "support": rng.normal(size=80),
+    })
+    regression = build_auto_specification({
+        "objective": "Examine the effect of training and motivation on performance",
+        "hypothesis": "Training and motivation positively predict performance",
+        "outcome_type": "continuous", "alpha": 0.05,
+    }, frame, None)
+    assert regression.method_key == "ols"
+    assert regression.config["outcome"] == "performance"
+    assert set(["training", "motivation"]).issubset(regression.config["predictors"])
+    assert regression.critical_blockers == []
+
+    network = build_auto_specification({
+        "objective": "Analyse the network structure, centrality and communities among training, motivation, performance and support",
+        "hypothesis": "Motivation will be a central node",
+        "outcome_type": "continuous", "alpha": 0.05,
+    }, frame, None)
+    assert network.method_key == "network"
+    assert network.config["network_input"] == "Correlation or partial-correlation network"
+    assert len(network.config["variables"]) == 4
+    assert network.critical_blockers == []
+
+
+def test_phase24_custom_path_positions_and_reproducibility_assets():
+    import io
+    import zipfile
+    from statready.figures import render_latent_path_diagram
+    from statready.models import AnalysisResult
+    construct_map = {"Training": ["t1", "t2"], "Performance": ["p1", "p2"]}
+    settings = {
+        "layout": "Left to right", "show_indicators": True, "show_loadings": True,
+        "show_indicator_names": True, "show_coefficients": True, "show_p_values": True,
+        "show_fit": True, "significance_colours": True, "custom_positions": {
+            "Training": {"x": 220, "y": 250}, "Performance": {"x": 850, "y": 360},
+        },
+    }
+    loading = pd.DataFrame([
+        {"construct": "Training", "indicator": "t1", "standardized_loading": .8},
+        {"construct": "Training", "indicator": "t2", "standardized_loading": .7},
+        {"construct": "Performance", "indicator": "p1", "standardized_loading": .85},
+        {"construct": "Performance", "indicator": "p2", "standardized_loading": .75},
+    ])
+    paths = pd.DataFrame([{"predictor": "Training", "outcome": "Performance", "standardized_estimate": .45, "p_value_approx": .01}])
+    figure = render_latent_path_diagram(construct_map, loading, [("Training", "Performance")], paths, pd.DataFrame(), settings=settings)
+    assert figure[:8] == b"\x89PNG\r\n\x1a\n"
+
+    result = AnalysisResult(
+        method="Comprehensive network analysis", summary="Network result",
+        figures={"Network structure": figure},
+        metadata={"interactive_network_html": "<!doctype html><html></html>", "diagram_settings": settings},
+    )
+    frame = pd.DataFrame({"x": [1, 2]})
+    package = build_reproducibility_package(frame, frame, result, {"title": "Test"}, pd.DataFrame(), [])
+    with zipfile.ZipFile(io.BytesIO(package)) as archive:
+        names = set(archive.namelist())
+        assert "Figures/Interactive_Network.html" in names
+        assert "Figures/Path_Diagram_Arrangement.json" in names
