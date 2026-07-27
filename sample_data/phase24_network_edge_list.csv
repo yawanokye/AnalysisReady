@@ -1,0 +1,15 @@
+source,target,collaboration_weight,department
+Lecturer_A,Lecturer_B,4,Education
+Lecturer_A,Lecturer_C,2,Education
+Lecturer_B,Lecturer_C,5,Education
+Lecturer_B,Lecturer_D,2,Education
+Lecturer_C,Lecturer_D,3,Education
+Lecturer_D,Lecturer_E,4,Business
+Lecturer_E,Lecturer_F,2,Business
+Lecturer_F,Lecturer_G,3,Business
+Lecturer_G,Lecturer_H,2,Business
+Lecturer_H,Lecturer_A,1,Business
+Lecturer_D,Lecturer_G,2,Business
+Lecturer_E,Lecturer_H,3,Business
+Lecturer_G,Lecturer_A,2,Business
+Lecturer_B,Lecturer_E,1,Education
