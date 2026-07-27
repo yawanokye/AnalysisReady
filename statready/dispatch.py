@@ -20,7 +20,6 @@ from .methods import (
 )
 from .figures import attach_latent_variable_figures
 from .pls_sem import partial_least_squares_sem
-from .network_analysis import network_analysis
 from .multilevel import multilevel_linear_model
 from .phase2 import (
     exploratory_factor_analysis,
@@ -305,6 +304,15 @@ def run_analysis(df: pd.DataFrame, method_key: str, config: dict[str, Any]):
             int(config.get("bootstrap_samples", 1000)), int(config.get("random_state", 42)),
         )
     elif method_key == "network":
+        try:
+            from .network_analysis import network_analysis
+        except ModuleNotFoundError as exc:
+            if exc.name == "matplotlib":
+                raise RuntimeError(
+                    "Network analysis requires Matplotlib. Redeploy with StatReady 2.4.2 "
+                    "or add matplotlib>=3.9,<4 to requirements.txt and clear the Render build cache."
+                ) from exc
+            raise
         result = network_analysis(df, config)
     elif method_key == "moderated_mediation":
         result = moderated_mediation_analysis(
