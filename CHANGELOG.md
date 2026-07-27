@@ -45,3 +45,11 @@
 - Added multilevel ML, REML and robust GEE workflows with level-1 and level-2 predictors, centring and random slopes for continuous outcomes.
 - Added robust GEE for binary and count clustered outcomes with working-correlation sensitivity, effect ratios, outcome-support and dispersion diagnostics.
 - Added updated DOCX, Excel and reproducibility exports and demonstration datasets.
+
+## 2.4.1
+
+- Fixed Render startup failure when Git or deployment tooling omitted the nested `frontend/build` directory.
+- Moved the packaged path-editor asset to `statready/path_editor_assets`, which is less likely to be ignored by Git tooling.
+- Embedded the complete component HTML in the Python module as a runtime fallback.
+- Added automatic recreation of the component in a writable temporary directory before Streamlit registers it.
+- Added a Docker build-time component health check and automated regression tests for missing packaged assets.

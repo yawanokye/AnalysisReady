@@ -349,3 +349,13 @@ tests/                         Engine and export tests
 - Small-cluster degrees-of-freedom corrections, negative-binomial clustered models and cluster bootstrap are not yet implemented.
 - The panel module does not yet include dynamic panel GMM, cointegration or cross-sectional-dependence estimators.
 - Uploaded projects remain session-based until authentication, database and object storage are added.
+
+### Render path-editor deployment safeguard
+
+Version 2.4.1 no longer depends on a committed directory named `build`. The path editor is shipped in `statready/path_editor_assets/index.html` and is also embedded in `statready/path_editor_component.py`. If the packaged HTML is absent, the app recreates it in the container temporary directory before Streamlit starts. This prevents the `No such component directory` startup failure.
+
+Before pushing to GitHub, you can verify the deployment asset with:
+
+```bash
+python -c "from statready.path_editor_component import component_asset_status; print(component_asset_status())"
+```
