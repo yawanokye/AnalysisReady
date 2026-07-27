@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.4.2
+
+- Fixed Render startup failure caused by the undeclared `matplotlib` runtime dependency used by network diagrams.
+- Added `matplotlib>=3.9,<4` to `requirements.txt`.
+- Added a Docker build-time dependency smoke test covering every third-party runtime package.
+- Changed network-analysis loading to be lazy, so a plotting dependency problem cannot prevent the rest of the application from starting.
+- Added regression tests that compare required runtime packages with the dependency manifest.
+
 ## 2.4.0
 
 - Added a persistent drag-and-click path-diagram editor for CFA, CB-SEM and PLS-SEM results.

@@ -359,3 +359,7 @@ Before pushing to GitHub, you can verify the deployment asset with:
 ```bash
 python -c "from statready.path_editor_component import component_asset_status; print(component_asset_status())"
 ```
+
+### Render dependency verification
+
+Version 2.4.2 declares Matplotlib explicitly because the network-analysis module uses it to generate publication figures. The Docker image now runs `python -m statready.dependency_check` during the build. If any required package is missing, the build stops before Render starts the web service. After replacing an older release, use **Manual Deploy → Clear build cache & deploy** so Render installs the revised requirements.

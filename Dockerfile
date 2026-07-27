@@ -11,6 +11,9 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 
 COPY . .
 
+# Catch missing Python packages during the image build rather than at web-service startup.
+RUN python -m statready.dependency_check
+
 # Fail the image build only if both the packaged asset and the embedded
 # runtime fallback are unusable. Importing the module verifies that a valid
 # component directory can be resolved before deployment.

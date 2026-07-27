@@ -1,0 +1,9 @@
+StatReady AI 2.4.2 Render dependency hotfix
+
+1. Copy these files into the matching paths in your GitHub repository.
+2. Commit and push the changes.
+3. In Render, choose Manual Deploy > Clear build cache & deploy.
+4. Confirm the build log shows matplotlib being installed and the dependency check completing.
+
+The essential correction is the matplotlib>=3.9,<4 line in requirements.txt.
+The other files add build-time dependency verification and lazy network-module loading.
