@@ -20,6 +20,7 @@ from .methods import (
 )
 from .figures import attach_latent_variable_figures
 from .pls_sem import partial_least_squares_sem
+from .network_analysis import network_analysis
 from .multilevel import multilevel_linear_model
 from .phase2 import (
     exploratory_factor_analysis,
@@ -64,6 +65,13 @@ def _analysis_variables(method_key: str, config: dict[str, Any]) -> list[str]:
         "advanced_moderation": [config.get("outcome"), config.get("predictor"), config.get("moderator"), *(config.get("controls") or [])],
         "parallel_mediation": [config.get("outcome"), config.get("predictor"), *(config.get("mediators") or []), *(config.get("controls") or [])],
         "moderated_mediation": [config.get("outcome"), config.get("predictor"), config.get("mediator"), config.get("moderator"), *(config.get("controls") or [])],
+        "network": (
+            [config.get("source"), config.get("target"), config.get("weight")]
+            if config.get("network_input") == "Edge list" else
+            ([config.get("node_label"), *(config.get("adjacency_columns") or [])]
+             if config.get("network_input") == "Adjacency matrix" else
+             [*(config.get("variables") or []), config.get("group_variable")])
+        ),
     }
     return list(dict.fromkeys(value for value in mappings.get(method_key, []) if value))
 
@@ -296,6 +304,8 @@ def run_analysis(df: pd.DataFrame, method_key: str, config: dict[str, Any]):
             df, config["outcome"], config["predictor"], config["mediators"], config.get("controls") or [], alpha,
             int(config.get("bootstrap_samples", 1000)), int(config.get("random_state", 42)),
         )
+    elif method_key == "network":
+        result = network_analysis(df, config)
     elif method_key == "moderated_mediation":
         result = moderated_mediation_analysis(
             df, config["outcome"], config["predictor"], config["mediator"], config["moderator"],

@@ -1,3 +1,3 @@
-"""StatReady Phase 2.3 statistical analysis engine."""
+"""StatReady Phase 2.4 statistical analysis engine."""
 
-__version__ = "0.2.3"
+__version__ = "0.2.4"

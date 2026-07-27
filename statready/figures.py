@@ -401,6 +401,21 @@ def render_latent_path_diagram(
     _center_text(draw, (width / 2, 82 * scale), subtitle, small_font, palette["muted"])
 
     positions = _latent_positions(nodes, paths, width, structural_bottom, layout)
+    custom_positions = settings.get("custom_positions") or {}
+    if custom_positions:
+        # Interactive editor coordinates use a stable 1100 x 610 canvas. Scale them
+        # into the structural region of the publication-quality PNG.
+        for node, point in custom_positions.items():
+            if node in positions and isinstance(point, dict):
+                try:
+                    x = float(point.get("x")); y = float(point.get("y"))
+                    if math.isfinite(x) and math.isfinite(y):
+                        positions[node] = (
+                            max(100 * scale, min(width - 100 * scale, x / 1100.0 * width)),
+                            max(120 * scale, min(structural_bottom - 60 * scale, y / 610.0 * structural_bottom)),
+                        )
+                except Exception:
+                    pass
     node_dimensions = {
         node: _node_dimensions(draw, node, node_font, scale)
         for node in nodes

@@ -7,6 +7,7 @@ from typing import Any
 
 import pandas as pd
 from docx import Document
+from docx.oxml import OxmlElement
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Inches, Pt
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -79,6 +80,14 @@ def _set_cell_text(cell, text: str, font_size: float = 8.5, bold: bool = False) 
     run.font.size = Pt(font_size)
 
 
+def _set_table_row_layout(row, repeat_header: bool = False) -> None:
+    """Keep table rows intact and repeat header rows across page breaks."""
+    properties = row._tr.get_or_add_trPr()
+    properties.append(OxmlElement("w:cantSplit"))
+    if repeat_header:
+        properties.append(OxmlElement("w:tblHeader"))
+
+
 def _add_dataframe(document: Document, frame: pd.DataFrame, max_rows: int = 100) -> None:
     if frame.empty:
         document.add_paragraph("No results available.")
@@ -94,21 +103,48 @@ def _add_dataframe(document: Document, frame: pd.DataFrame, max_rows: int = 100)
                 document.add_paragraph(f"Record {record_number}").runs[0].bold = True
             table = document.add_table(rows=1, cols=2)
             table.style = "Table Grid"
+            _set_table_row_layout(table.rows[0], repeat_header=True)
             _set_cell_text(table.rows[0].cells[0], "Measure", 8.5, True)
             _set_cell_text(table.rows[0].cells[1], "Value", 8.5, True)
             for column, value in row.items():
-                cells = table.add_row().cells
+                new_row = table.add_row()
+                _set_table_row_layout(new_row)
+                cells = new_row.cells
                 _set_cell_text(cells[0], str(column), 8.5, True)
                 _set_cell_text(cells[1], _format_value(value), 8.5)
         return
 
+    # Split very wide multi-record outputs into readable metric blocks. The first
+    # identifier column is repeated in every block so that rows remain traceable.
+    if len(display) > 2 and len(display.columns) > 10:
+        identifier = display.columns[0]
+        measure_columns = list(display.columns[1:])
+        chunk_size = 6
+        for start in range(0, len(measure_columns), chunk_size):
+            chunk = measure_columns[start:start + chunk_size]
+            label = ", ".join(str(column) for column in chunk)
+            paragraph = document.add_paragraph()
+            run = paragraph.add_run(f"Measures: {label}")
+            run.bold = True
+            run.font.size = Pt(8.5)
+            _add_dataframe(document, display[[identifier] + chunk], max_rows=max_rows)
+        if len(frame) > max_rows:
+            document.add_paragraph(
+                f"Only the first {max_rows} of {len(frame)} rows are shown in this document. "
+                "The Excel export contains the full table."
+            )
+        return
+
     table = document.add_table(rows=1, cols=len(display.columns))
     table.style = "Table Grid"
+    _set_table_row_layout(table.rows[0], repeat_header=True)
     font_size = 7.2 if len(display.columns) >= 7 else 8.2 if len(display.columns) >= 5 else 9
     for idx, column in enumerate(display.columns):
         _set_cell_text(table.rows[0].cells[idx], str(column), font_size, True)
     for _, row in display.iterrows():
-        cells = table.add_row().cells
+        new_row = table.add_row()
+        _set_table_row_layout(new_row)
+        cells = new_row.cells
         for idx, value in enumerate(row):
             _set_cell_text(cells[idx], _format_value(value), font_size)
     if len(frame) > max_rows:
@@ -134,7 +170,7 @@ def build_docx_report(
 
     title = document.add_heading(study.get("title") or "StatReady Analysis Report", level=0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    subtitle = document.add_paragraph("Phase 2 statistical analysis, advanced models, diagnostics and reproducibility report")
+    subtitle = document.add_paragraph("Phase 2.4 statistical analysis, advanced models, network analysis, diagnostics and reproducibility report")
     subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     document.add_heading("Study specification", level=1)
@@ -210,10 +246,12 @@ def build_docx_report(
             document.add_paragraph(warning, style="List Bullet")
 
     if result.figures:
-        document.add_heading("Path and measurement diagram", level=1)
+        is_network = "network" in result.method.lower()
+        document.add_heading("Network analysis figures" if is_network else "Path and measurement diagram", level=1)
         document.add_paragraph(
-            "The diagram presents the prespecified model and the standardised estimates obtained from the fitted analysis. "
-            "It should be interpreted together with the coefficient tables, diagnostics and fit indices."
+            "The figures present network structure, communities, centrality, degree distribution and adjacency patterns. Interpret them with the construction rule, diagnostics and stability tables."
+            if is_network else
+            "The diagram presents the prespecified model and the standardised estimates obtained from the fitted analysis. It should be interpreted together with the coefficient tables, diagnostics and fit indices."
         )
         for figure_name, figure_bytes in result.figures.items():
             paragraph = document.add_paragraph()
@@ -232,8 +270,17 @@ def build_docx_report(
         "Factor scores": 25,
     }
     for name, table in inferential_tables.items():
+        if name == "Paper-ready abstract":
+            document.add_page_break()
         document.add_heading(name, level=2)
-        _add_dataframe(document, table, max_rows=compact_row_limits.get(name, 100))
+        if name.startswith("Paper-ready") and "text" in table.columns:
+            for _, row in table.iterrows():
+                if row.get("section"):
+                    paragraph = document.add_paragraph()
+                    paragraph.add_run(str(row.get("section"))).bold = True
+                document.add_paragraph(str(row.get("text", "")))
+        else:
+            _add_dataframe(document, table, max_rows=compact_row_limits.get(name, 100))
 
     document.add_heading("Diagnostics and assumptions", level=1)
     if result.diagnostics.empty:
@@ -344,8 +391,8 @@ def build_excel_report(
             table.to_excel(writer, sheet_name=sheet, index=False)
 
         for figure_index, (figure_name, figure_bytes) in enumerate(result.figures.items(), start=1):
-            base_name = "SEM_Diagram" if "SEM" in figure_name else "CFA_Diagram"
-            sheet_name = (base_name if figure_index == 1 else f"{base_name}_{figure_index}")[:31]
+            safe_base = "".join(ch for ch in figure_name if ch.isalnum() or ch == "_")[:22] or "Figure"
+            sheet_name = f"Fig{figure_index}_{safe_base}"[:31]
             pd.DataFrame({
                 "Diagram": [figure_name],
                 "Interpretation": ["Standardised estimates. Interpret together with the path/loading tables and model-fit diagnostics."],
@@ -441,5 +488,9 @@ def build_reproducibility_package(
         for figure_name, figure_bytes in result.figures.items():
             safe_name = "".join(ch if ch.isalnum() else "_" for ch in figure_name).strip("_")
             archive.writestr(f"Figures/{safe_name}.png", figure_bytes)
+        if result.metadata.get("interactive_network_html"):
+            archive.writestr("Figures/Interactive_Network.html", str(result.metadata["interactive_network_html"]))
+        if (result.metadata.get("diagram_settings") or {}).get("custom_positions"):
+            archive.writestr("Figures/Path_Diagram_Arrangement.json", json.dumps(result.metadata["diagram_settings"]["custom_positions"], indent=2))
         archive.writestr("Analysis_Metadata.json", json.dumps(metadata, indent=2, default=str))
     return package.getvalue()

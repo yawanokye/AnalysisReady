@@ -148,6 +148,31 @@ CURATED_REFERENCES = [
         "doi": "10.1093/biomet/73.1.13",
         "supports": "Population-average estimation with generalized estimating equations and robust covariance.",
     },
+    {
+        "topic": "network_analysis",
+        "citation": "Wasserman, S., & Faust, K. (1994). Social Network Analysis: Methods and Applications. Cambridge University Press.",
+        "doi": "10.1017/CBO9780511815478",
+        "supports": "Network definition, graph-level measures, centrality, subgroups and reporting of relational data.",
+    },
+    {
+        "topic": "network_science",
+        "citation": "Newman, M. E. J. (2018). Networks (2nd ed.). Oxford University Press.",
+        "doi": "",
+        "supports": "Graph structure, centrality, communities, assortativity, paths and network models.",
+    },
+    {
+        "topic": "psychological_networks",
+        "citation": "Epskamp, S., Borsboom, D., & Fried, E. I. (2018). Estimating psychological networks and their accuracy: A tutorial paper. Behavior Research Methods, 50, 195–212.",
+        "doi": "10.3758/s13428-017-0862-1",
+        "supports": "Regularised partial-correlation networks, accuracy, bootstrap stability and cautious centrality interpretation.",
+    },
+    {
+        "topic": "community_detection",
+        "citation": "Blondel, V. D., Guillaume, J.-L., Lambiotte, R., & Lefebvre, E. (2008). Fast unfolding of communities in large networks. Journal of Statistical Mechanics: Theory and Experiment, 2008(10), P10008.",
+        "doi": "10.1088/1742-5468/2008/10/P10008",
+        "supports": "Louvain modularity-based community detection.",
+    },
+
 ]
 
 
@@ -161,6 +186,8 @@ def reference_table(topics: list[str] | None = None) -> pd.DataFrame:
 def references_for_method(method: str, diagnostics: pd.DataFrame | None = None) -> pd.DataFrame:
     method_lower = method.lower()
     topics: set[str] = set()
+    if "network" in method_lower:
+        topics.update({"network_analysis", "network_science", "psychological_networks", "community_detection"})
     if "reliability" in method_lower:
         topics.add("reliability")
     if "mediation" in method_lower:

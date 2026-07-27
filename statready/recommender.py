@@ -25,6 +25,7 @@ METHOD_LABELS = {
     "advanced_moderation": "Advanced moderation with simple slopes",
     "parallel_mediation": "Parallel multiple mediation",
     "moderated_mediation": "First-stage moderated mediation",
+    "network": "Comprehensive network analysis",
 }
 
 
@@ -37,7 +38,10 @@ def recommend_method(
 ) -> dict[str, str]:
     text = f"{objective} {hypothesis}".lower()
 
-    if re.search(r"pls.?sem|partial least squares|composite structural", text):
+    if re.search(r"network analysis|social network|psychological network|correlation network|partial correlation network|centrality|community detection|node and edge|network structure", text):
+        key = "network"
+        reason = "The objective concerns relationships among nodes, ties or variables and requires network structure, centrality, communities, stability and network diagrams."
+    elif re.search(r"pls.?sem|partial least squares|composite structural", text):
         key = "pls_sem"
         reason = "The wording specifies a composite-based PLS structural equation model with predictive and latent-variable assessment."
     elif re.search(r"structural equation|\bsem\b|latent path|latent variable model", text):
