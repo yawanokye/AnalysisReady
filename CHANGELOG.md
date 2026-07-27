@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.4.0
+
+- Added a persistent drag-and-click path-diagram editor for CFA, CB-SEM and PLS-SEM results.
+- Added click-to-nudge controls, automatic layouts, saved node positions and arrangement JSON export.
+- Applied saved path positions to in-app PNGs, DOCX, Excel and reproducibility-package exports.
+- Expanded the AI research agent to use objectives, hypotheses, framework wording and dataset structure to complete the full analysis specification.
+- Added automatic outcome, predictor, mediator, moderator, control, group, cluster, entity, time and construct assignment where evidence is sufficient.
+- Added a one-click guided run that pauses only for critical unresolved design or variable decisions.
+- Added comprehensive network analysis for edge lists, adjacency matrices, correlation networks and regularised partial-correlation networks.
+- Added directed, undirected, weighted, unweighted and signed-network options.
+- Added node degree, strength, in/out degree, betweenness, closeness, harmonic, eigenvector, PageRank, hub, authority, structural-hole, clustering, k-core and community measures.
+- Added graph density, components, isolates, clustering, modularity, reciprocity, assortativity, path length, diameter, efficiency, clique size, centralisation and small-world assessment.
+- Added edge betweenness, bridge edges, articulation nodes, directed triad census, bootstrap edge stability and centrality stability.
+- Added two-group network comparison with permutation tests.
+- Added interactive draggable network HTML and five publication-ready network diagrams.
+- Added paper-ready abstract, methods, results, diagnostics, robustness, discussion, limitations, figure captions and reporting checklist.
+- Expanded the automated test suite from 21 to 25 passing tests.
+
 ## 2.3.0
 
 - Added AI Guided Mode with Novice, Assisted and Expert co-pilot levels.

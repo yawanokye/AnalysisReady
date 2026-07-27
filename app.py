@@ -5,8 +5,11 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from statready.agent import build_guided_review
+from statready.figures import render_latent_path_diagram
+from statready.path_editor_component import path_editor
 from statready.dispatch import run_analysis
 from statready.io import list_excel_sheets, load_tabular_file
 from statready.literature import references_for_method
@@ -43,6 +46,8 @@ def init_state() -> None:
         "source_name": "",
         "agent_review": None,
         "experience_mode": "AI Guided",
+        "auto_specification": None,
+        "diagram_positions": {},
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -403,6 +408,56 @@ def render_diagram_settings(method_key: str, constructs: list[str]) -> dict:
     return settings
 
 
+def apply_auto_spec_to_state(auto_spec) -> None:
+    st.session_state.auto_specification = auto_spec
+    st.session_state.recommended_method_key = auto_spec.method_key
+    st.session_state["analysis_method_label"] = auto_spec.method_label
+    frame = st.session_state.framework
+    if isinstance(frame, pd.DataFrame) and not frame.empty and auto_spec.role_assignments:
+        updated = frame.copy()
+        updated["role"] = [auto_spec.role_assignments.get(str(variable), role) for variable, role in zip(updated["variable"], updated["role"])]
+        st.session_state.framework = updated
+    if auto_spec.framework_narrative and not str(st.session_state.study.get("framework_notes", "")).strip():
+        st.session_state.study["framework_notes"] = auto_spec.framework_narrative
+    config = auto_spec.config
+    if auto_spec.method_key in {"cfa", "sem", "pls_sem"}:
+        definitions = []
+        for name, items in (config.get("construct_map") or {}).items():
+            mode = "Formative (Mode B)" if (config.get("measurement_modes") or {}).get(name) == "formative" else ("Reflective (Mode A)" if auto_spec.method_key == "pls_sem" else "Reflective common-factor")
+            definitions.append({"name": name, "mode": mode, "items": items})
+        st.session_state.study[f"{auto_spec.method_key}_construct_definitions"] = definitions
+        if config.get("structural_relations") is not None:
+            st.session_state.study[f"{auto_spec.method_key}_structural_relations"] = config.get("structural_relations") or []
+
+
+def latent_diagram_payload(result):
+    method = getattr(result, "method", "")
+    construct_map = result.metadata.get("construct_map") or {}
+    paths = [tuple(path) for path in (result.metadata.get("paths") or [])]
+    if method == "Covariance-based structural equation model":
+        return construct_map, paths, result.tables.get("SEM standardised loadings", pd.DataFrame()), result.tables.get("Structural path estimates", pd.DataFrame()), result.tables.get("SEM fit indices", pd.DataFrame()), "SEM path diagram", "Structural equation model path diagram"
+    if method == "Confirmatory factor analysis":
+        return construct_map, [], result.tables.get("CFA standardised loadings", pd.DataFrame()), pd.DataFrame(), result.tables.get("CFA fit indices", pd.DataFrame()), "CFA measurement diagram", "Confirmatory factor analysis measurement diagram"
+    if method == "Partial least squares structural equation model":
+        return construct_map, paths, result.tables.get("PLS outer loadings", pd.DataFrame()), result.tables.get("PLS structural path estimates", pd.DataFrame()), result.tables.get("PLS-SEM model summary", pd.DataFrame()), "PLS-SEM path diagram", "Partial least squares SEM path diagram"
+    return None
+
+
+def update_result_diagram(result, custom_positions: dict[str, dict[str, float]]) -> None:
+    payload = latent_diagram_payload(result)
+    if not payload:
+        return
+    construct_map, paths, loading_table, path_table, fit_table, figure_name, title = payload
+    settings = dict(result.metadata.get("diagram_settings") or {})
+    settings["custom_positions"] = custom_positions
+    result.metadata["diagram_settings"] = settings
+    result.figures[figure_name] = render_latent_path_diagram(
+        construct_map=construct_map, loading_table=loading_table, paths=paths,
+        path_table=path_table, fit_table=fit_table, title=title, settings=settings,
+        structural_relations=result.metadata.get("structural_relations") or [],
+    )
+
+
 def render_method_configuration(method_key: str, columns: list[str], numeric_columns: list[str]) -> dict:
     config: dict = {"alpha": st.number_input("Significance level", min_value=0.001, max_value=0.20, value=float(st.session_state.study.get("alpha", 0.05)), step=0.01, format="%.3f")}
     roles = framework_defaults()
@@ -551,6 +606,53 @@ def render_method_configuration(method_key: str, columns: list[str], numeric_col
         config["controls"] = st.multiselect("Optional controls", [c for c in numeric_columns if c not in excluded], key="mm_controls")
         config["bootstrap_samples"] = int(st.number_input("Bootstrap resamples", min_value=500, max_value=5000, value=1000, step=500, key="mm_boot"))
         config["random_state"] = int(st.number_input("Random seed", min_value=0, max_value=999999, value=42, step=1, key="mm_seed"))
+    elif method_key == "network":
+        st.markdown("#### Network construction")
+        config["network_input"] = st.selectbox(
+            "Network input structure",
+            ["Edge list", "Correlation or partial-correlation network", "Adjacency matrix"],
+            help="Use an edge list for relational data, a correlation network for variables measured on cases, or a square adjacency matrix.",
+            key="network_input_mode",
+        )
+        if config["network_input"] == "Edge list":
+            config["source"] = variable_selector("Source or origin node", columns, "network_source")
+            config["target"] = variable_selector("Target or destination node", columns, "network_target")
+            config["weight"] = variable_selector("Optional edge weight", numeric_columns, "network_weight", allow_none=True)
+            config["directed"] = st.checkbox("Directed network", value=False, key="network_directed")
+            config["allow_self_loops"] = st.checkbox("Retain substantively meaningful self-loops", value=False, key="network_self_loops")
+        elif config["network_input"] == "Correlation or partial-correlation network":
+            config["variables"] = st.multiselect(
+                "Network variables or nodes", numeric_columns,
+                default=[v for v in roles["Scale item"] + roles["Outcome"] + roles["Predictor"] if v in numeric_columns][:20],
+                key="network_variables",
+            )
+            config["network_estimator"] = st.selectbox(
+                "Association estimator",
+                ["Pearson correlation", "Spearman correlation", "Partial correlation (Graphical Lasso)"],
+                help="Graphical Lasso estimates a regularised partial-correlation network. Pearson and Spearman networks retain marginal associations.",
+                key="network_estimator",
+            )
+            config["edge_threshold"] = float(st.slider("Minimum absolute edge value", 0.00, 0.80, 0.20, 0.01, key="network_threshold"))
+            config["retain_negative"] = st.checkbox("Retain negative edges", value=True, key="network_negative")
+            config["bootstrap_samples"] = int(st.number_input("Bootstrap stability resamples", min_value=0, max_value=2000, value=200, step=100, key="network_bootstrap"))
+            group_options = ["<none>"] + columns
+            selected_group = st.selectbox("Optional two-group network comparison", group_options, key="network_group")
+            config["group_variable"] = None if selected_group == "<none>" else selected_group
+            config["group_values"] = []
+            config["permutation_samples"] = 0
+            if config["group_variable"]:
+                values = list(st.session_state.analysis_df[config["group_variable"]].dropna().unique()) if st.session_state.analysis_df is not None else []
+                config["group_values"] = st.multiselect("Select exactly two groups", values, max_selections=2, key="network_group_values")
+                config["permutation_samples"] = int(st.number_input("Network-comparison permutations", min_value=100, max_value=5000, value=500, step=100, key="network_permutations"))
+        else:
+            config["node_label"] = variable_selector("Optional row/node label column", columns, "network_node_label", allow_none=True)
+            config["adjacency_columns"] = st.multiselect("Square adjacency-matrix columns", numeric_columns, key="network_adjacency_columns")
+            config["directed"] = st.checkbox("Directed adjacency matrix", value=False, key="network_adjacency_directed")
+            config["allow_self_loops"] = st.checkbox("Retain self-loops", value=False, key="network_adjacency_loops")
+        st.markdown("#### Network diagnostics and diagrams")
+        config["layout"] = st.selectbox("Primary network layout", ["Spring", "Kamada-Kawai", "Circular", "Shell", "Spectral"], key="network_layout")
+        config["random_graph_iterations"] = int(st.number_input("Random graphs for small-world sensitivity", min_value=10, max_value=500, value=50, step=10, key="network_random_graphs"))
+        config["random_state"] = int(st.number_input("Random seed", min_value=0, max_value=999999, value=42, step=1, key="network_seed"))
 
     if method_key != "descriptive":
         config["profile_variables"] = st.multiselect(
@@ -585,6 +687,7 @@ def validate_config(method_key: str, config: dict) -> str | None:
         "advanced_moderation": ["outcome", "predictor", "moderator"],
         "parallel_mediation": ["outcome", "predictor", "mediators"],
         "moderated_mediation": ["outcome", "predictor", "mediator", "moderator"],
+        "network": ["network_input"],
     }.get(method_key, [])
     for field in required:
         value = config.get(field)
@@ -612,13 +715,30 @@ def validate_config(method_key: str, config: dict) -> str | None:
         return "The random-slope variable must be selected as a level-1 predictor."
     if method_key == "panel" and config.get("entity") == config.get("time"):
         return "Entity and time identifiers must be different variables."
+    if method_key == "network":
+        mode = config.get("network_input")
+        if mode == "Edge list":
+            if not config.get("source") or not config.get("target"):
+                return "Select source and target node columns."
+            if config.get("source") == config.get("target"):
+                return "Source and target must use different columns."
+        elif mode == "Correlation or partial-correlation network":
+            if len(config.get("variables") or []) < 3:
+                return "Select at least three variables for a correlation network."
+            if config.get("group_variable") and len(config.get("group_values") or []) != 2:
+                return "Select exactly two groups for network comparison or remove the group variable."
+        elif mode == "Adjacency matrix":
+            if len(config.get("adjacency_columns") or []) < 2:
+                return "Select at least two adjacency-matrix columns."
+            if st.session_state.analysis_df is not None and len(st.session_state.analysis_df) != len(config.get("adjacency_columns") or []):
+                return "The adjacency matrix must be square: selected columns must equal the number of rows."
     return None
 
 
 init_state()
 
 st.title("StatReady AI")
-st.caption("Phase 2.3: flexible path diagrams, AI Guided Mode, structured CB-SEM and PLS-SEM, multilevel models, diagnostics and reproducible reporting")
+st.caption("Phase 2.4: interactive path editing, autonomous AI specification, comprehensive network analysis, advanced models and reproducible reporting")
 st.info("The app never changes data merely to obtain significance. It preserves the original dataset, records every treatment, uses robust or alternative methods where justified, and keeps sensitivity results visible.")
 st.session_state.experience_mode = st.segmented_control(
     "Working mode", ["AI Guided", "Standard"],
@@ -806,7 +926,7 @@ with framework_tab:
 
 with agent_tab:
     st.subheader("AI Guided Mode for research and statistical decisions")
-    st.write("The guided agent combines study wording, dataset structure, variable roles and statistical decision rules. Every recommendation remains reviewable. It will not delete observations, transform variables, change estimators or run a final model without your approval.")
+    st.write("The guided agent uses the objectives, hypotheses, framework wording and dataset structure to complete the required analysis specification. It pauses only when a critical variable or design decision cannot be inferred safely. Data deletion and transformations always require human approval.")
     guidance_level = st.selectbox(
         "Guidance level", ["Novice", "Assisted", "Expert co-pilot"],
         index=["Novice", "Assisted", "Expert co-pilot"].index(st.session_state.study.get("guidance_level", "Novice")),
@@ -896,6 +1016,49 @@ with agent_tab:
                 st.session_state["analysis_method_label"] = METHOD_LABELS[target_key]
                 st.success("Suggestions were loaded into the construct builder. Confirm names, indicators, measurement modes and structural relationships before analysis.")
 
+        st.markdown("### AI-completed analysis specification")
+        auto_spec = review.auto_specification
+        if auto_spec is None:
+            st.info("Upload a dataset to generate a complete analysis specification.")
+        else:
+            st.write(f"**Completion confidence: {auto_spec.confidence}**")
+            st.dataframe(auto_spec.completed_fields, use_container_width=True, hide_index=True)
+            if auto_spec.assumptions_for_confirmation:
+                st.markdown("**Provisional assumptions to confirm**")
+                for assumption in auto_spec.assumptions_for_confirmation:
+                    st.info(assumption)
+            if auto_spec.critical_blockers:
+                st.error("Critical human input is required before the model can run.")
+                for blocker in auto_spec.critical_blockers:
+                    st.write(f"• {blocker}")
+            else:
+                confirm_spec = st.checkbox(
+                    "I confirm that the inferred variables, directions, measurement blocks and construction rules match the study.",
+                    key="agent_confirm_auto_spec",
+                )
+                cauto1, cauto2 = st.columns(2)
+                with cauto1:
+                    if st.button("Use the complete AI specification", key="agent_apply_full_spec"):
+                        apply_auto_spec_to_state(auto_spec)
+                        st.success("The complete specification, variable roles and provisional framework have been applied. It can be run here or reviewed in the analysis workspace.")
+                with cauto2:
+                    if st.button("Run AI-completed analysis", type="primary", disabled=not confirm_spec, key="agent_run_full_spec"):
+                        try:
+                            validation_error = validate_config(auto_spec.method_key, auto_spec.config)
+                            if validation_error:
+                                st.error(validation_error)
+                            else:
+                                with st.spinner("Running the AI-completed analysis and diagnostics..."):
+                                    result = run_analysis(st.session_state.analysis_df, auto_spec.method_key, auto_spec.config)
+                                st.session_state.analysis_result = result
+                                st.session_state.analysis_plan = analysis_plan_frame(auto_spec.method_label, auto_spec.config)
+                                st.session_state.study["method"] = auto_spec.method_label
+                                st.session_state.study["alpha"] = auto_spec.config.get("alpha", st.session_state.study.get("alpha", 0.05))
+                                apply_auto_spec_to_state(auto_spec)
+                                st.success("Analysis completed. Review the diagnostics, diagrams and paper-ready reporting outputs.")
+                        except Exception as exc:
+                            st.error(f"The guided analysis could not be completed: {exc}")
+
         st.markdown("### Guided next actions")
         for number, action in enumerate(review.next_actions, start=1):
             st.write(f"{number}. {action}")
@@ -916,6 +1079,14 @@ with analysis_tab:
         selected_label = st.selectbox("Statistical method", labels, index=default_index, key="analysis_method_label")
         selected_key = METHOD_OPTIONS[selected_label]
         config = render_method_configuration(selected_key, columns, numeric_columns)
+        saved_auto_spec = st.session_state.get("auto_specification")
+        if saved_auto_spec is not None and getattr(saved_auto_spec, "method_key", None) == selected_key:
+            with st.expander("AI-completed configuration available", expanded=True):
+                st.dataframe(saved_auto_spec.completed_fields, use_container_width=True, hide_index=True)
+                use_auto = st.checkbox("Use these completed values for this run", value=True, key="analysis_use_auto_spec")
+                if use_auto:
+                    config = dict(saved_auto_spec.config)
+                    st.caption("The AI-completed values replace the manual controls above for this run. Clear the checkbox to use the manual selections.")
         config["alpha"] = float(config.get("alpha", st.session_state.study.get("alpha", 0.05)))
         if selected_key in {"cfa", "sem"}:
             st.warning("CFA and covariance-based SEM use an internal covariance-fitting engine with ML, GLS, ULS and DWLS objectives. Confirm publication-critical models in specialist SEM software, especially for ordinal indicators, complex models or small samples.")
@@ -955,9 +1126,43 @@ with results_tab:
             for warning in result.warnings:
                 st.warning(warning)
 
+        latent_payload = latent_diagram_payload(result)
+        if latent_payload:
+            construct_map, paths, _, _, _, editor_figure_name, _ = latent_payload
+            st.markdown("### Interactive path-diagram editor")
+            st.caption("Drag constructs directly, or click a construct and use the arrow controls. Select Save arrangement to update the publication-quality PNG, DOCX, Excel and reproducibility exports.")
+            saved_positions = (result.metadata.get("diagram_settings") or {}).get("custom_positions") or st.session_state.diagram_positions.get(editor_figure_name, {})
+            edited_positions = path_editor(
+                nodes=list(construct_map), edges=paths, positions=saved_positions,
+                height=680, key=f"path_editor_{editor_figure_name}",
+            )
+            if edited_positions and edited_positions != saved_positions:
+                st.session_state.diagram_positions[editor_figure_name] = edited_positions
+                update_result_diagram(result, edited_positions)
+                st.success("The saved arrangement has been applied to the result diagram and all new exports.")
+            arrangement = (result.metadata.get("diagram_settings") or {}).get("custom_positions") or edited_positions or saved_positions
+            if arrangement:
+                import json as _json
+                st.download_button(
+                    "Download diagram arrangement", _json.dumps(arrangement, indent=2),
+                    file_name="StatReady_path_diagram_arrangement.json", mime="application/json",
+                    key="download_diagram_arrangement",
+                )
+
+        interactive_network = result.metadata.get("interactive_network_html")
+        if interactive_network:
+            st.markdown("### Interactive network diagram")
+            st.caption("Drag nodes and click a node to inspect its centrality and community measures. The static publication diagrams remain available below.")
+            components.html(interactive_network, height=720, scrolling=False)
+            st.download_button(
+                "Download interactive network HTML", interactive_network,
+                file_name="StatReady_Interactive_Network.html", mime="text/html",
+                key="download_interactive_network",
+            )
+
         if result.figures:
-            st.markdown("### Path and measurement diagram")
-            st.caption("Standardised estimates are displayed. Interpret the figure together with the coefficient tables, diagnostics and model-fit indices.")
+            st.markdown("### Diagrams and figures")
+            st.caption("Interpret figures together with coefficient, diagnostic, stability and model-fit tables.")
             for figure_index, (figure_name, figure_bytes) in enumerate(result.figures.items(), start=1):
                 st.image(figure_bytes, caption=figure_name, use_container_width=True)
                 safe_name = "".join(ch if ch.isalnum() else "_" for ch in figure_name).strip("_")
@@ -1043,4 +1248,4 @@ with results_tab:
             st.code(result.reproducible_code, language="python")
 
 st.divider()
-st.caption("StatReady AI Phase 2.3 | Flexible path diagrams | AI Guided Mode | Original data preserved | Alternatives documented")
+st.caption("StatReady AI Phase 2.4 | Drag-and-click path editing | Autonomous guided analysis | Comprehensive network analysis | Original data preserved")

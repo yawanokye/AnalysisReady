@@ -1,4 +1,4 @@
-# StatReady AI, Phase 2.3
+# StatReady AI, Phase 2.4
 
 StatReady AI is a transparent statistical analysis and reporting application for CSV and Excel data. It links research objectives, hypotheses, conceptual-framework roles and dataset structure to statistical methods, diagnostics, defensible responses and reproducible exports.
 
@@ -83,6 +83,39 @@ CFA, CB-SEM and PLS-SEM diagrams now support:
 - dashed moderation arrows directed to the focal structural path
 
 The selected diagram settings are stored in the analysis plan, applied to the in-app figure and retained in DOCX, Excel and reproducibility-package exports.
+
+
+## Phase 2.4 additions
+
+### Persistent drag-and-click path editor
+
+CFA, covariance-based SEM and PLS-SEM results now include an interactive path editor. Users can drag constructs directly, click a construct and nudge it with arrow controls, switch among automatic layouts, reset the model or save the arrangement. Saved node coordinates are applied to the publication-quality PNG and all newly generated DOCX, Excel and reproducibility-package exports. The arrangement can also be downloaded as JSON.
+
+### Autonomous AI-completed analysis specification
+
+The AI research agent now reads the objectives, hypotheses, framework narrative, confirmed variable roles and dataset structure to complete the method-specific inputs. It can identify outcomes, predictors, mediators, moderators, controls, groups, clusters, entity and time identifiers, repeated measures, construct blocks, structural paths and network construction rules.
+
+The agent provides a complete specification table and a one-click guided analysis. It pauses only when a critical human decision cannot be inferred safely, such as an ambiguous outcome, unresolved construct direction, missing cluster identifier or unclear network node/edge meaning. Applying the specification also updates provisional variable roles and the framework narrative. Data deletion, transformations and final causal direction remain human-controlled.
+
+### Comprehensive network analysis
+
+Network analysis supports:
+
+- edge-list data with source, target and optional weight columns
+- square adjacency matrices
+- Pearson and Spearman correlation networks
+- regularised partial-correlation networks using Graphical Lasso CV
+- directed, undirected, weighted, unweighted and signed networks
+- optional self-loops and duplicate-edge aggregation
+- two-group network comparison with permutation tests
+
+Node-level measures include degree, absolute and signed strength, in/out degree and strength, betweenness, closeness, harmonic, eigenvector and PageRank centrality, hub and authority scores, average-neighbour degree, effective size, constraint, local clustering, k-core and community membership.
+
+Graph-level measures include density, connected components, isolates, clustering, modularity, reciprocity, assortativity, shortest path length, diameter, global and local efficiency, clique size, degree and betweenness centralisation, and small-world sensitivity against random graphs. Edge outputs include edge betweenness, bridge status, articulation nodes and directed triad census where applicable.
+
+Correlation networks can include bootstrap edge-inclusion probabilities and centrality-rank stability. The output provides an interactive draggable network, network structure, community, centrality, degree-distribution and adjacency-heatmap figures.
+
+The DOCX and Excel outputs include paper-ready abstract, methods, results, diagnostics, robustness, discussion, limitations, figure captions and a network-reporting checklist.
 
 ## Statistical methods
 
@@ -234,7 +267,7 @@ pip install pytest
 python -m pytest -q
 ```
 
-The included suite contains 21 tests covering Phase 1 methods, automatic descriptives, exports, EFA, CFA, multiple covariance estimators, CB-SEM, PLS-SEM, repeated measures, mixed effects, multilevel diagnostics, panel selection, conditional-process models, AI-guided recommendations and all major path-diagram layouts.
+The included suite contains 25 tests covering Phase 1 methods, automatic descriptives, exports, EFA, CFA, multiple covariance estimators, CB-SEM, PLS-SEM, repeated measures, mixed effects, multilevel diagnostics, panel selection, conditional-process models, AI-completed specifications, interactive path layouts, comprehensive network analysis, network stability and reproducibility assets.
 
 ## Deploy to Render
 
