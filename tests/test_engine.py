@@ -553,3 +553,240 @@ def test_phase24_custom_path_positions_and_reproducibility_assets():
         names = set(archive.namelist())
         assert "Figures/Interactive_Network.html" in names
         assert "Figures/Path_Diagram_Arrangement.json" in names
+
+
+
+def test_path_editor_component_runtime_fallback(tmp_path):
+    from statready.path_editor_assets import resolve_component_path
+
+    missing_asset = tmp_path / "missing_component_assets"
+    fallback_root = tmp_path / "runtime_cache"
+    resolved = resolve_component_path(packaged_path=missing_asset, cache_root=fallback_root)
+    assert resolved.is_dir()
+    assert (resolved / "index.html").is_file()
+    assert "Interactive path editor" in (resolved / "index.html").read_text(encoding="utf-8")
+
+
+def test_path_editor_packaged_asset_exists():
+    from statready.path_editor_assets import resolve_component_path
+
+    resolved = resolve_component_path()
+    assert resolved.name == "path_editor_assets"
+    assert (resolved / "index.html").is_file()
+
+
+def test_all_runtime_dependencies_are_declared():
+    import re
+    from pathlib import Path
+
+    requirements = (Path(__file__).parents[1] / "requirements.txt").read_text(encoding="utf-8")
+    declared = {
+        re.split(r"[<>=!~\[]", line.strip(), maxsplit=1)[0].lower()
+        for line in requirements.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    required = {
+        "streamlit", "pandas", "numpy", "scipy", "statsmodels",
+        "scikit-learn", "openpyxl", "xlrd", "python-docx", "plotly",
+        "matplotlib", "pillow", "networkx", "openai", "pydantic",
+    }
+    assert required.issubset(declared), sorted(required - declared)
+
+
+def test_matplotlib_headless_import():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    figure = plt.figure()
+    plt.close(figure)
+
+
+def test_phase25_framework_vision_reconciliation_without_api():
+    from statready.framework_vision import (
+        FrameworkVisionExtraction, VisionConstruct, VisionRelationship, reconcile_framework,
+    )
+    extraction = FrameworkVisionExtraction(
+        diagram_summary="Digital competence predicts performance through motivation.",
+        constructs=[
+            VisionConstruct(name="Digital competence", indicators=["dc1", "dc2", "dc3"], role="predictor", measurement_mode="reflective"),
+            VisionConstruct(name="Motivation", indicators=["mot1", "mot2"], role="mediator", measurement_mode="reflective"),
+            VisionConstruct(name="Performance", indicators=["perf1", "perf2"], role="outcome", measurement_mode="reflective"),
+        ],
+        relationships=[
+            VisionRelationship(predictor="Digital competence", outcome="Performance", relationship_type="mediation", mediator="Motivation", expected_sign="positive")
+        ],
+        confidence="high",
+    )
+    mapped, rows = reconcile_framework(extraction, ["dc1", "dc2", "dc3", "mot1", "mot2", "perf1", "perf2"])
+    assert mapped["construct_map"]["Digital competence"] == ["dc1", "dc2", "dc3"]
+    assert ("Digital competence", "Motivation") in mapped["paths"]
+    assert any(row["status"] == "Matched" for row in rows)
+
+
+def test_phase25_objective_specific_analysis_program_uses_framework():
+    from statready.agent import build_analysis_program
+    df = make_phase2_data()
+    structured = {
+        "construct_map": {
+            "ConstructA": ["a1", "a2", "a3", "a4"],
+            "ConstructB": ["b1", "b2", "b3", "b4"],
+        },
+        "measurement_modes": {"ConstructA": "reflective", "ConstructB": "reflective"},
+        "paths": [("ConstructA", "ConstructB")],
+        "structural_relations": [{"type": "Direct", "predictor": "ConstructA", "outcome": "ConstructB"}],
+        "moderations": [],
+    }
+    study = {
+        "objectives": "1. Examine the effect of ConstructA on ConstructB.\n2. Describe the study variables.",
+        "hypotheses": "H1. ConstructA positively predicts ConstructB.",
+        "outcome_type": "continuous",
+        "group_count": 0,
+        "paired": False,
+        "alpha": 0.05,
+        "framework_structured": structured,
+    }
+    programme = build_analysis_program(study, df, pd.DataFrame())
+    assert len(programme.assignments) == 2
+    assert programme.assignments[0].method_key == "sem"
+    assert programme.assignments[0].specification.config["paths"] == [("ConstructA", "ConstructB")]
+    assert set(programme.mapping_table["objective_id"]) == {"O1", "O2"}
+
+
+def test_phase25_proposed_and_estimated_diagrams_are_attached():
+    from statready.analysis_diagrams import proposed_diagram
+    df = load_data()
+    config = {
+        "outcome": "performance",
+        "predictors": ["training", "motivation", "support"],
+        "alpha": 0.05,
+        "diagram_settings": {"layout": "Left to right", "arrow_style": "Curved"},
+    }
+    preview = proposed_diagram("ols", config)
+    assert preview[:8] == b"\x89PNG\r\n\x1a\n"
+    result = run_analysis(df, "ols", config)
+    assert "Proposed model before estimation" in result.figures
+    assert "Estimated analysis model" in result.figures
+    assert result.figures["Estimated analysis model"][:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_phase25_latent_analysis_exports_proposed_and_final_diagrams():
+    df = make_phase2_data()
+    config = {
+        "construct_map": {"ConstructA": ["a1", "a2", "a3", "a4"], "ConstructB": ["b1", "b2", "b3", "b4"]},
+        "paths": [("ConstructA", "ConstructB")],
+        "structural_relations": [{"type": "Direct", "predictor": "ConstructA", "outcome": "ConstructB"}],
+        "diagram_settings": {"layout": "Top to bottom", "arrow_style": "Curved", "show_indicators": True},
+        "alpha": 0.05,
+        "random_state": 42,
+        "estimator": "ML",
+    }
+    result = run_analysis(df, "sem", config)
+    assert "Proposed model before estimation" in result.figures
+    assert "SEM path diagram" in result.figures
+
+
+def test_phase26_render_model_routing():
+    text = (Path(__file__).parents[1] / "render.yaml").read_text()
+    assert "OPENAI_VISION_MODEL" in text and "gpt-5.4-nano" in text
+    assert "OPENAI_VISION_FALLBACK_MODEL" in text and "gpt-5.6-luna" in text
+    assert "AGENT_REASONING_MODEL" in text and "deepseek-v4-flash" in text
+    assert "AGENT_REASONING_FALLBACK_MODEL" in text and "deepseek-v4-pro" in text
+    assert "DEEPSEEK_API_KEY" in text
+
+
+def test_phase26_framework_graph_validation():
+    from statready.framework_vision import (
+        FrameworkVisionExtraction,
+        VisionConstruct,
+        VisionRelationship,
+        validate_framework_graph,
+    )
+    valid = FrameworkVisionExtraction(
+        diagram_summary="Training predicts performance through motivation.",
+        constructs=[
+            VisionConstruct(name="Training"),
+            VisionConstruct(name="Motivation", role="mediator"),
+            VisionConstruct(name="Performance", role="outcome"),
+        ],
+        relationships=[
+            VisionRelationship(
+                predictor="Training",
+                outcome="Performance",
+                relationship_type="mediation",
+                mediator="Motivation",
+            )
+        ],
+        confidence="high",
+    )
+    assert validate_framework_graph(valid) == []
+    invalid = FrameworkVisionExtraction(
+        diagram_summary="Invalid graph.",
+        constructs=[VisionConstruct(name="Training"), VisionConstruct(name="Training")],
+        relationships=[VisionRelationship(predictor="Training", outcome="Unknown")],
+        confidence="low",
+    )
+    issues = validate_framework_graph(invalid)
+    assert any("Duplicate" in item for item in issues)
+    assert any("Unknown outcome" in item for item in issues)
+
+
+def test_phase26_provider_absence_uses_local_agent(monkeypatch):
+    from statready.agent import build_analysis_program
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    df = load_data()
+    study = {
+        "objectives": "Examine the effect of training on performance.",
+        "hypotheses": "Training significantly predicts performance.",
+        "outcome_type": "continuous",
+        "alpha": 0.05,
+    }
+    programme = build_analysis_program(study, df)
+    assert programme.provider == "Deterministic local agent"
+    assert programme.assignments
+    assert any("DEEPSEEK_API_KEY" in warning for warning in programme.provider_warnings)
+
+
+def test_phase26_validated_provider_plan_overlays_dataset_columns(monkeypatch):
+    from statready import agent as agent_module
+    from statready.ai_providers import (
+        AgentAssignmentDraft,
+        AgentProgrammeDraft,
+        AgentProviderResult,
+    )
+    draft = AgentProgrammeDraft(
+        programme_summary="One objective-specific regression.",
+        assignments=[AgentAssignmentDraft(
+            objective_id="O1",
+            objective="Examine the effect of training and motivation on performance.",
+            hypothesis_id="H1",
+            hypothesis="Training and motivation predict performance.",
+            method_key="ols",
+            rationale="The outcome and predictors are continuous observed variables.",
+            confidence="high",
+            roles={"outcome": "performance", "predictors": ["training", "motivation"]},
+            config_hints={"outcome": "performance", "predictors": ["training", "motivation", "invented_variable"]},
+        )],
+    )
+    monkeypatch.setattr(
+        agent_module,
+        "generate_analysis_programme_with_provider",
+        lambda *args, **kwargs: AgentProviderResult(
+            draft=draft,
+            provider="DeepSeek deepseek-v4-flash",
+            models_attempted=["deepseek-v4-flash"],
+        ),
+    )
+    df = load_data()
+    study = {
+        "objectives": "Examine the effect of training and motivation on performance.",
+        "hypotheses": "Training and motivation predict performance.",
+        "outcome_type": "continuous",
+        "alpha": 0.05,
+    }
+    programme = agent_module.build_analysis_program(study, df, api_key="test-key")
+    spec = programme.assignments[0].specification
+    assert programme.provider == "DeepSeek deepseek-v4-flash"
+    assert spec.config["outcome"] == "performance"
+    assert spec.config["predictors"] == ["training", "motivation"]
+    assert "invented_variable" not in spec.config["predictors"]
