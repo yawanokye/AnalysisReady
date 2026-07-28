@@ -1,6 +1,88 @@
-# StatReady AI, Phase 2.4
+# StatReady AI, Phase 2.6
 
 StatReady AI is a transparent statistical analysis and reporting application for CSV and Excel data. It links research objectives, hypotheses, conceptual-framework roles and dataset structure to statistical methods, diagnostics, defensible responses and reproducible exports.
+
+## Phase 2.6 cost-aware hybrid AI workflow
+
+### Professional interface
+
+The crowded multi-tab screen has been replaced by a focused sidebar workflow:
+
+1. Study design
+2. Data and preparation
+3. Conceptual framework
+4. AI analysis plan
+5. Manual analysis
+6. Results and exports
+
+Only one workspace is visible at a time. A branded visual system, progress indicator, readiness badges, grouped cards, compact tables and objective-specific results make the application easier for novice and expert users.
+
+### Conceptual-framework vision
+
+Users can upload PNG, JPG, JPEG or WebP conceptual-framework diagrams. When `OPENAI_API_KEY` is configured, the vision agent extracts:
+
+- construct names and aliases
+- observed indicators
+- reflective, formative, observed or unclear measurement
+- predictor, outcome, mediator, moderator and control roles
+- direct, mediation, moderation and covariance relationships
+- expected relationship signs
+- ambiguous labels or arrow directions requiring human confirmation
+
+The extraction is matched to uploaded dataset column names and presented in an editable review table. Dataset values are not sent to the vision model. Only the diagram, objectives, hypotheses and column names are submitted. The reviewed framework feeds CFA, CB-SEM, PLS-SEM and relevant observed-variable analyses.
+
+Configure Render secrets:
+
+```text
+OPENAI_API_KEY=<secret key>
+DEEPSEEK_API_KEY=<secret key>
+```
+
+The default model routing is declared in `render.yaml`:
+
+```text
+OPENAI_VISION_MODEL=gpt-5.4-nano
+OPENAI_VISION_FALLBACK_MODEL=gpt-5.6-luna
+AGENT_REASONING_MODEL=deepseek-v4-flash
+AGENT_REASONING_FALLBACK_MODEL=deepseek-v4-pro
+```
+
+Both API keys are marked `sync: false`, so enter them as Render secrets rather than committing them to GitHub.
+
+### Objective-specific novice agent
+
+Objectives and hypotheses are entered one per line. The agent creates a coverage matrix showing which statistical method addresses each objective and hypothesis. For every objective it completes defensible fields from the study wording, confirmed framework, diagram extraction, variable roles and dataset structure. It stops only for critical unresolved decisions such as ambiguous causal direction, missing cluster identifiers, unclear formative measurement or unmatched constructs.
+
+Ready specifications can be run individually or as a complete analysis programme. Every result, DOCX report, Excel workbook and reproducibility package contains an **Objective and hypothesis addressed** table. A combined ZIP provides all objective-specific reports and the complete analysis mapping.
+
+### Proposed and estimated diagrams
+
+Path-based analyses now generate two distinct figures:
+
+- **Proposed model before estimation**, showing selected variables, constructs and directions without coefficients
+- **Estimated analysis model**, showing available coefficients and p-values after estimation
+
+SEM and PLS-SEM retain the drag-and-click editor for the final estimated diagram. Proposed and final figures are included in on-screen results and reproducibility exports.
+
+
+
+### Provider validation and fallback sequence
+
+Framework extraction follows this sequence:
+
+1. Resize the image to a controlled maximum dimension.
+2. Extract with GPT-5.4 nano using strict Pydantic parsing.
+3. Validate construct names, path references, mediation and moderation fields.
+4. Retry with GPT-5.6 Luna at higher image detail only when required.
+5. Present unresolved issues for human confirmation rather than inventing relationships.
+
+Analysis planning follows this sequence:
+
+1. Send objectives, hypotheses, confirmed framework and aggregate schema metadata to DeepSeek V4 Flash.
+2. Validate the JSON response with Pydantic and deterministic StatReady method rules.
+3. Escalate to DeepSeek V4 Pro only when the first response is invalid, low confidence or genuinely complex.
+4. Fall back to the deterministic local planning engine when both provider attempts fail.
+5. Require user confirmation before running the final objective-specific analyses.
 
 ## Phase 1 foundation
 
@@ -59,7 +141,9 @@ The guided workflow provides:
 - user-selectable Novice, Assisted and Expert co-pilot guidance levels
 - explicit confirmation before suggested roles or construct specifications are applied
 
-The current agent combines deterministic research-method rules and dataset diagnostics. This makes the guidance reproducible and keeps the app functional without an external language-model API. A provider-backed generative explanation layer can be added later without changing the statistical engine.
+Phase 2.6 uses a cost-aware hybrid architecture. GPT-5.4 nano performs routine conceptual-framework extraction and escalates to GPT-5.6 Luna only when confidence is low or graph validation fails. DeepSeek V4 Flash builds routine objective-specific analysis programmes and escalates to V4 Pro only for validation failure or genuine analytical complexity. Every provider response is validated before use. When either API key is missing or a provider is unavailable, the structured manual framework editor and deterministic local planning agent remain available.
+
+Only the conceptual-framework image, study wording and dataset column names are sent to the vision provider. The reasoning provider receives objectives, hypotheses, the reviewed framework and aggregate dataset schema metadata such as variable names, storage types, unique counts and missingness percentages. Raw dataset rows are never sent to either planning provider. Statistical computation remains local in Python.
 
 ### Flexible path and measurement diagrams
 
@@ -330,6 +414,9 @@ statready/phase2.py            EFA, CFA, CB-SEM, repeated measures, panel and co
 statready/pls_sem.py           PLS-SEM estimation, bootstrap and diagnostics
 statready/multilevel.py        ML, REML and GEE multilevel analysis
 statready/figures.py           CFA, CB-SEM and PLS-SEM diagrams
+statready/analysis_diagrams.py  Proposed and estimated observed-variable diagrams
+statready/framework_vision.py   Conceptual-framework image extraction and data matching
+statready/ui_theme.py           Professional Streamlit theme and interface components
 statready/diagnostics.py       Assumption and diagnostic tests
 statready/treatments.py        Logged data treatments
 statready/profiling.py         Dataset screening

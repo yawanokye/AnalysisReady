@@ -1,5 +1,34 @@
 # Changelog
 
+## 2.6.0
+
+- Added cost-aware model routing for conceptual-framework vision and analysis planning.
+- Set GPT-5.4 nano as the primary framework reader and GPT-5.6 Luna as the controlled fallback.
+- Added image resizing and configurable low-detail primary versus high-detail fallback extraction.
+- Added graph validation for duplicate constructs, unknown path endpoints, self-paths and incomplete mediation or moderation definitions.
+- Added DeepSeek V4 Flash as the primary objective-specific planning model and V4 Pro as the controlled fallback.
+- Added Pydantic validation for DeepSeek JSON responses and deterministic validation of every proposed method configuration.
+- Added safe overlay of provider suggestions onto verified dataset columns and StatReady method fields.
+- Added provider, model-attempt and fallback status to the Streamlit interface.
+- Added a deterministic local fallback when API keys, providers or schema-valid responses are unavailable.
+- Prevented raw dataset rows from being sent to either planning provider. Only aggregate schema metadata is shared with the reasoning provider.
+- Added separate Render secrets and model environment variables for OpenAI and DeepSeek.
+- Expanded the automated test suite from 33 to 37 passing tests.
+
+## 2.5.0
+
+- Reorganised the Streamlit interface into six focused sidebar workspaces with professional branding, progress indicators, status badges, cards and simplified result navigation.
+- Added multiple objectives and hypotheses with objective-by-objective analysis mapping.
+- Added a complete AI analysis programme that fills method-specific fields from objectives, hypotheses, framework evidence, variable roles and dataset structure.
+- Added critical-decision gates so ambiguous causal direction, measurement mode, identifier structure and unmatched variables require human confirmation.
+- Added conceptual-framework image upload and structured vision extraction using the OpenAI Responses API when `OPENAI_API_KEY` is configured.
+- Added diagram-to-dataset variable reconciliation with editable indicator matches.
+- Added proposed, non-estimated path diagrams before analysis and final estimated diagrams after analysis.
+- Added objective and hypothesis mapping to every result, DOCX report, Excel workbook and reproducibility package.
+- Added a combined objective-specific analysis ZIP export.
+- Added Render environment-variable declarations for `OPENAI_API_KEY` and `OPENAI_VISION_MODEL`.
+- Expanded the automated test suite from 29 to 33 passing tests.
+
 ## 2.4.2
 
 - Fixed Render startup failure caused by the undeclared `matplotlib` runtime dependency used by network diagrams.

@@ -2,13 +2,19 @@ from __future__ import annotations
 
 from io import BytesIO
 from pathlib import Path
+import json
+import os
+import zipfile
 
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
-from statready.agent import build_guided_review
+from statready.agent import build_guided_review, build_analysis_program, parse_research_items
 from statready.figures import render_latent_path_diagram
+from statready.analysis_diagrams import proposed_diagram
+from statready.framework_vision import analyse_framework_image
+from statready.ui_theme import apply_professional_theme, hero, card, status_badge
 from statready.path_editor_component import path_editor
 from statready.dispatch import run_analysis
 from statready.io import list_excel_sheets, load_tabular_file
@@ -48,6 +54,14 @@ def init_state() -> None:
         "experience_mode": "AI Guided",
         "auto_specification": None,
         "diagram_positions": {},
+        "analysis_results": {},
+        "analysis_program": None,
+        "active_result_key": None,
+        "framework_image_bytes": None,
+        "framework_image_name": "",
+        "framework_image_mime": "",
+        "framework_vision": None,
+        "navigation": "Study design",
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -736,516 +750,696 @@ def validate_config(method_key: str, config: dict) -> str | None:
 
 
 init_state()
+apply_professional_theme()
 
-st.title("StatReady AI")
-st.caption("Phase 2.4: interactive path editing, autonomous AI specification, comprehensive network analysis, advanced models and reproducible reporting")
-st.info("The app never changes data merely to obtain significance. It preserves the original dataset, records every treatment, uses robust or alternative methods where justified, and keeps sensitivity results visible.")
-st.session_state.experience_mode = st.segmented_control(
-    "Working mode", ["AI Guided", "Standard"],
-    default=st.session_state.get("experience_mode", "AI Guided"),
-    help="AI Guided Mode provides reviewable recommendations and readiness checks. It does not make irreversible decisions or alter data without confirmation.",
-) or "AI Guided"
 
-study_tab, data_tab, framework_tab, agent_tab, analysis_tab, results_tab = st.tabs([
-    "1. Study design", "2. Data preparation", "3. Conceptual framework", "4. AI research agent", "5. Run analysis", "6. Results and exports"
-])
+def _research_items(text: str, prefix: str) -> list[tuple[str, str]]:
+    return parse_research_items(text, prefix)
 
-with study_tab:
-    st.subheader("Research specification")
-    col1, col2 = st.columns(2)
-    with col1:
-        title = st.text_input("Study title", value=st.session_state.study.get("title", ""))
-        objective = st.text_area("Objective", value=st.session_state.study.get("objective", ""), height=110)
-        hypothesis = st.text_area("Hypothesis", value=st.session_state.study.get("hypothesis", ""), height=90)
-    with col2:
-        outcome_type = st.selectbox("Expected outcome type", ["continuous", "binary", "categorical", "ordinal", "count"])
-        group_count = st.number_input("Number of comparison groups, where relevant", min_value=0, max_value=50, value=0)
-        paired = st.checkbox("The same participants or units are measured twice")
-        alpha = st.number_input("Default significance level", min_value=0.001, max_value=0.20, value=float(st.session_state.study.get("alpha", 0.05)), step=0.01, format="%.3f")
 
-    st.session_state.study = {
-        **st.session_state.study,
-        "title": title,
-        "objective": objective,
-        "hypothesis": hypothesis,
-        "outcome_type": outcome_type,
-        "group_count": int(group_count),
-        "paired": paired,
-        "alpha": alpha,
+def _step_statuses() -> dict[str, bool]:
+    study_ready = bool(str(st.session_state.study.get("objectives") or st.session_state.study.get("objective", "")).strip())
+    data_ready = st.session_state.analysis_df is not None and not st.session_state.analysis_df.empty
+    framework_ready = bool(st.session_state.study.get("framework_structured") or str(st.session_state.study.get("framework_notes", "")).strip())
+    programme_ready = st.session_state.analysis_program is not None
+    results_ready = bool(st.session_state.analysis_results or st.session_state.analysis_result is not None)
+    return {
+        "Study design": study_ready,
+        "Data and preparation": data_ready,
+        "Conceptual framework": framework_ready,
+        "AI analysis plan": programme_ready,
+        "Manual analysis": data_ready,
+        "Results and exports": results_ready,
     }
 
-    if st.button("Recommend statistical method", type="primary"):
-        recommendation = recommend_method(objective, hypothesis, outcome_type, int(group_count) or None, paired)
-        st.session_state.recommended_method_key = recommendation["method_key"]
-        st.session_state.study["recommendation_reason"] = recommendation["reason"]
-        st.session_state["analysis_method_label"] = METHOD_LABELS[recommendation["method_key"]]
 
-    recommended_key = st.session_state.recommended_method_key
-    st.success(f"Recommended starting method: **{METHOD_LABELS[recommended_key]}**")
-    if st.session_state.study.get("recommendation_reason"):
-        st.write(st.session_state.study["recommendation_reason"])
-    st.caption("The recommendation is rule-based and must be confirmed against variable measurement, sampling design and the conceptual framework.")
+def _sidebar() -> str:
+    steps = list(_step_statuses())
+    statuses = _step_statuses()
+    st.sidebar.markdown("## StatReady AI")
+    st.sidebar.caption("Defensible analysis, from research question to reproducible report")
+    completed = sum(statuses.values())
+    st.sidebar.progress(completed / len(statuses), text=f"Workflow readiness: {completed}/{len(statuses)}")
+    st.sidebar.markdown("---")
+    selected = st.sidebar.radio(
+        "Workspace",
+        steps,
+        index=steps.index(st.session_state.navigation) if st.session_state.navigation in steps else 0,
+        label_visibility="collapsed",
+    )
+    st.session_state.navigation = selected
+    st.sidebar.markdown("---")
+    st.sidebar.selectbox(
+        "Guidance level",
+        ["Novice guided", "Assisted", "Expert"],
+        index=["Novice guided", "Assisted", "Expert"].index(st.session_state.study.get("guidance_level", "Novice guided"))
+        if st.session_state.study.get("guidance_level", "Novice guided") in ["Novice guided", "Assisted", "Expert"] else 0,
+        key="guidance_level_control",
+        help="Novice guided mode completes defensible fields and explains each decision. Expert mode keeps the review gates but reduces guidance text.",
+    )
+    st.session_state.study["guidance_level"] = st.session_state.guidance_level_control
+    st.sidebar.markdown(
+        status_badge("Original data preserved", "green")
+        + status_badge("Audit trail active", "blue"),
+        unsafe_allow_html=True,
+    )
+    st.sidebar.caption("StatReady never changes data merely to obtain significance.")
+    return selected
 
-with data_tab:
-    st.subheader("Upload and screen the dataset")
-    uploaded = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx", "xls"])
-    upload_allowed = True
-    if uploaded is not None and getattr(uploaded, "size", 0) > 100 * 1024 * 1024:
-        st.error("The file exceeds the 100 MB deployment limit. Reduce the file or use a higher-capacity private deployment.")
-        upload_allowed = False
-    selected_sheet = None
-    if uploaded is not None and upload_allowed and Path(uploaded.name).suffix.lower() in {".xlsx", ".xls"}:
-        try:
-            sheets = list_excel_sheets(uploaded.getvalue())
-            selected_sheet = st.selectbox("Excel sheet", sheets)
-        except Exception as exc:
-            st.error(f"Could not read workbook sheets: {exc}")
 
-    if uploaded is not None and upload_allowed and st.button("Load dataset", type="primary"):
-        try:
-            load_uploaded_data(uploaded, selected_sheet)
-            st.success("Dataset loaded. The original copy is preserved.")
-        except Exception as exc:
-            st.error(f"Upload failed: {exc}")
+def _go(page: str) -> None:
+    st.session_state.navigation = page
+    st.rerun()
 
-    if st.session_state.analysis_df is not None:
-        original_df = st.session_state.original_df
-        analysis_df = st.session_state.analysis_df
-        st.write(f"**Source:** {st.session_state.source_name} | **Original rows:** {len(original_df):,} | **Analysis rows:** {len(analysis_df):,}")
+
+def _assignment_mapping_table(objective_id: str, objective: str, hypothesis_id: str, hypothesis: str, method: str) -> pd.DataFrame:
+    return pd.DataFrame([{
+        "objective_id": objective_id,
+        "objective_addressed": objective,
+        "hypothesis_id": hypothesis_id or "Not stated",
+        "hypothesis_addressed": hypothesis or "Exploratory or descriptive objective",
+        "statistical_analysis": method,
+    }])
+
+
+def _store_result(key: str, result, config: dict, method_key: str, method_label: str, objective_id: str, objective: str, hypothesis_id: str, hypothesis: str) -> None:
+    mapping = _assignment_mapping_table(objective_id, objective, hypothesis_id, hypothesis, method_label)
+    result.tables = {"Objective and hypothesis addressed": mapping, **result.tables}
+    result.metadata.update({
+        "objective_id": objective_id,
+        "objective": objective,
+        "hypothesis_id": hypothesis_id,
+        "hypothesis": hypothesis,
+        "method_key": method_key,
+    })
+    local_study = {
+        **st.session_state.study,
+        "objective": objective,
+        "hypothesis": hypothesis,
+        "method": method_label,
+    }
+    original_objective = st.session_state.study.get("objective", "")
+    original_hypothesis = st.session_state.study.get("hypothesis", "")
+    st.session_state.study["objective"] = objective
+    st.session_state.study["hypothesis"] = hypothesis
+    plan = analysis_plan_frame(method_label, config)
+    st.session_state.study["objective"] = original_objective
+    st.session_state.study["hypothesis"] = original_hypothesis
+    st.session_state.analysis_results[key] = {
+        "result": result,
+        "config": config,
+        "method_key": method_key,
+        "method_label": method_label,
+        "study": local_study,
+        "plan": plan,
+        "objective_id": objective_id,
+        "objective": objective,
+        "hypothesis_id": hypothesis_id,
+        "hypothesis": hypothesis,
+    }
+    st.session_state.active_result_key = key
+    st.session_state.analysis_result = result
+    st.session_state.analysis_plan = plan
+
+
+def _run_one_spec(key: str, objective_id: str, objective: str, hypothesis_id: str, hypothesis: str, method_key: str, method_label: str, config: dict):
+    error = validate_config(method_key, config)
+    if error:
+        raise ValueError(error)
+    result = run_analysis(st.session_state.analysis_df, method_key, config)
+    _store_result(key, result, config, method_key, method_label, objective_id, objective, hypothesis_id, hypothesis)
+    return result
+
+
+def _batch_export() -> bytes:
+    output = BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        for key, record in st.session_state.analysis_results.items():
+            safe = "".join(ch if ch.isalnum() else "_" for ch in key).strip("_") or "analysis"
+            result = record["result"]
+            docx_bytes = build_docx_report(result, record["study"], record["plan"], st.session_state.audit_entries)
+            xlsx_bytes = build_excel_report(st.session_state.original_df, st.session_state.analysis_df, result, record["plan"], st.session_state.audit_entries)
+            package = build_reproducibility_package(st.session_state.original_df, st.session_state.analysis_df, result, record["study"], record["plan"], st.session_state.audit_entries)
+            archive.writestr(f"{safe}/{safe}_Report.docx", docx_bytes)
+            archive.writestr(f"{safe}/{safe}_Results.xlsx", xlsx_bytes)
+            archive.writestr(f"{safe}/{safe}_Reproducibility.zip", package)
+        if st.session_state.analysis_program is not None:
+            archive.writestr("Analysis_Objective_Mapping.csv", st.session_state.analysis_program.mapping_table.to_csv(index=False))
+    return output.getvalue()
+
+
+def page_study() -> None:
+    hero("Design the analysis around the study", "Enter each objective and hypothesis on a separate line. The agent will build an objective-specific analysis programme rather than forcing the whole study into one test.")
+    c1, c2 = st.columns([1.35, 1], gap="large")
+    with c1:
+        st.markdown("### Research purpose")
+        title = st.text_input("Study title", value=st.session_state.study.get("title", ""), placeholder="Enter a clear working title")
+        objectives = st.text_area(
+            "Study objectives, one per line",
+            value=st.session_state.study.get("objectives", st.session_state.study.get("objective", "")),
+            height=190,
+            placeholder="1. Examine the effect of ...\n2. Test the mediating role of ...",
+        )
+        hypotheses = st.text_area(
+            "Hypotheses, one per line and in matching order",
+            value=st.session_state.study.get("hypotheses", st.session_state.study.get("hypothesis", "")),
+            height=170,
+            placeholder="H1. X has a positive effect on Y.\nH2. M mediates the relationship between X and Y.",
+        )
+        framework_notes = st.text_area(
+            "Conceptual framework description, optional when a diagram will be uploaded",
+            value=st.session_state.study.get("framework_notes", ""),
+            height=110,
+            placeholder="Describe the expected direction, mediator, moderator and controls.",
+        )
+    with c2:
+        st.markdown("### Design details")
+        outcome_options = ["continuous", "binary", "categorical", "ordinal", "count"]
+        current_outcome = st.session_state.study.get("outcome_type", "continuous")
+        outcome_type = st.selectbox("Expected primary outcome type", outcome_options, index=outcome_options.index(current_outcome) if current_outcome in outcome_options else 0)
+        study_design = st.selectbox(
+            "Study design",
+            ["Cross-sectional", "Experimental or quasi-experimental", "Longitudinal or repeated measures", "Panel data", "Multilevel or clustered", "Exploratory"],
+            index=0,
+        )
+        group_count = st.number_input("Number of comparison groups, where relevant", min_value=0, max_value=50, value=int(st.session_state.study.get("group_count", 0)))
+        paired = st.checkbox("The same participants or units are measured repeatedly", value=bool(st.session_state.study.get("paired", False)))
+        alpha = st.number_input("Significance level", min_value=0.001, max_value=0.20, value=float(st.session_state.study.get("alpha", 0.05)), step=0.01, format="%.3f")
+        objective_items = _research_items(objectives, "O")
+        hypothesis_items = _research_items(hypotheses, "H")
+        st.markdown("### Entry check")
+        m1, m2 = st.columns(2)
+        m1.metric("Objectives", len(objective_items))
+        m2.metric("Hypotheses", len(hypothesis_items))
+        if hypothesis_items and len(hypothesis_items) != len(objective_items):
+            st.warning("The agent will map hypotheses by order, but unmatched items will be marked for review.")
+        else:
+            st.success("The objectives and hypotheses are ready for objective-specific mapping.")
+
+    first_objective = objective_items[0][1] if objective_items else ""
+    first_hypothesis = hypothesis_items[0][1] if hypothesis_items else ""
+    st.session_state.study.update({
+        "title": title,
+        "objectives": objectives,
+        "hypotheses": hypotheses,
+        "objective": first_objective,
+        "hypothesis": first_hypothesis,
+        "framework_notes": framework_notes,
+        "outcome_type": outcome_type,
+        "study_design": study_design,
+        "group_count": int(group_count),
+        "paired": paired,
+        "alpha": float(alpha),
+    })
+    st.markdown("---")
+    cnext1, cnext2 = st.columns([1, 3])
+    if cnext1.button("Continue to data", type="primary", use_container_width=True):
+        _go("Data and preparation")
+    cnext2.caption("The agent can refine the outcome type and design from the dataset and conceptual framework. Critical causal or measurement decisions still require confirmation.")
+
+
+def page_data() -> None:
+    hero("Prepare and understand the data", "Upload CSV or Excel data. The original file is preserved, while every treatment is documented on a separate analysis copy.")
+    with st.container(border=True):
+        uploaded = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx", "xls"], help="Maximum recommended upload size on the Render Starter plan is 100 MB.")
+        selected_sheet = None
+        if uploaded is not None and Path(uploaded.name).suffix.lower() in {".xlsx", ".xls"}:
+            try:
+                selected_sheet = st.selectbox("Excel sheet", list_excel_sheets(uploaded.getvalue()))
+            except Exception as exc:
+                st.error(f"Could not read workbook sheets: {exc}")
+        if uploaded is not None:
+            if getattr(uploaded, "size", 0) > 100 * 1024 * 1024:
+                st.error("The file exceeds 100 MB. Use a higher-capacity private deployment or reduce the file.")
+            elif st.button("Load and profile dataset", type="primary"):
+                try:
+                    load_uploaded_data(uploaded, selected_sheet)
+                    st.success("Dataset loaded and profiled. The original copy is preserved.")
+                except Exception as exc:
+                    st.error(f"Upload failed: {exc}")
+
+    if st.session_state.analysis_df is None:
+        card("No dataset loaded", "Upload a CSV or Excel file to activate screening, conceptual-framework matching and analysis.", "Required")
+        return
+
+    original_df = st.session_state.original_df
+    analysis_df = st.session_state.analysis_df
+    profile = dataset_profile(analysis_df)
+    overview = profile["overview"].iloc[0]
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Rows", f"{int(overview['rows']):,}")
+    m2.metric("Variables", f"{analysis_df.shape[1]:,}")
+    m3.metric("Missing cells", f"{int(overview['total_missing_cells']):,}")
+    m4.metric("Duplicate rows", f"{int(overview['duplicate_rows']):,}")
+
+    overview_tab, quality_tab, treatment_tab = st.tabs(["Data preview", "Quality review", "Documented preparation"])
+    with overview_tab:
+        st.caption(f"Source: {st.session_state.source_name} | Original rows: {len(original_df):,} | Current analysis rows: {len(analysis_df):,}")
         st.dataframe(analysis_df.head(100), use_container_width=True)
-
-        profile = dataset_profile(analysis_df)
-        c1, c2, c3 = st.columns(3)
-        overview = profile["overview"].iloc[0]
-        c1.metric("Rows", f"{int(overview['rows']):,}")
-        c2.metric("Missing cells", f"{int(overview['total_missing_cells']):,}")
-        c3.metric("Duplicate rows", f"{int(overview['duplicate_rows']):,}")
-        with st.expander("Variable profile", expanded=False):
-            st.dataframe(profile["variables"], use_container_width=True)
-        with st.expander("Missingness", expanded=False):
-            st.dataframe(profile["missingness"], use_container_width=True)
-        with st.expander("Outlier screening", expanded=False):
-            st.dataframe(outlier_summary(analysis_df), use_container_width=True)
-
-        st.markdown("#### Documented data preparation")
-        t1, t2, t3, t4, t5 = st.tabs(["Missing codes", "Duplicates", "Imputation", "Winsorisation", "Transformation"])
-        with t1:
-            st.write("Convert common text codes such as NA, missing and null to true missing values in the analysis copy.")
-            if st.button("Normalise missing-value codes"):
+    with quality_tab:
+        q1, q2 = st.columns(2)
+        with q1:
+            st.markdown("#### Variable profile")
+            st.dataframe(profile["variables"], use_container_width=True, hide_index=True)
+        with q2:
+            st.markdown("#### Missingness")
+            st.dataframe(profile["missingness"], use_container_width=True, hide_index=True)
+        st.markdown("#### Outlier screening")
+        st.dataframe(outlier_summary(analysis_df), use_container_width=True, hide_index=True)
+    with treatment_tab:
+        st.warning("Treatments are never selected to improve significance. The untreated model and original data remain available.")
+        a, b, c = st.columns(3)
+        with a:
+            st.markdown("#### Basic cleaning")
+            if st.button("Normalise missing-value codes", use_container_width=True):
                 cleaned, changes = normalise_missing_codes(st.session_state.analysis_df)
                 st.session_state.analysis_df = cleaned
                 for _, row in changes.iterrows():
-                    add_audit(AuditEntry(
-                        action=str(row["action"]), variable=str(row["variable"]),
-                        details=f"Converted {int(row['values_changed'])} coded value(s) to missing.",
-                        justification="The values matched common missing-data codes. The original dataset remains unchanged.",
-                        before_n=len(cleaned), after_n=len(cleaned),
-                    ))
+                    add_audit(AuditEntry(action=str(row["action"]), variable=str(row["variable"]), details=f"Converted {int(row['values_changed'])} coded value(s) to missing.", justification="The values matched common missing-data codes. The original dataset remains unchanged.", before_n=len(cleaned), after_n=len(cleaned)))
                 st.success(f"Recorded {len(changes)} variable-level change(s).")
-        with t2:
-            if st.button("Drop exact duplicate rows"):
+            if st.button("Drop exact duplicate rows", use_container_width=True):
                 cleaned, entry = drop_duplicate_rows(st.session_state.analysis_df)
                 st.session_state.analysis_df = cleaned
                 add_audit(entry)
                 st.success(entry.details)
-        with t3:
-            columns = list(st.session_state.analysis_df.columns)
-            selected = st.multiselect("Variables to impute", columns, key="impute_columns")
-            strategy = st.selectbox("Strategy", ["median", "mean", "mode"])
-            st.warning("Simple imputation can understate uncertainty. Compare results with complete-case analysis and use multiple imputation in later phases where appropriate.")
-            if st.button("Apply documented imputation"):
+        with b:
+            st.markdown("#### Missing data")
+            selected = st.multiselect("Variables to impute", list(analysis_df.columns), key="pro_impute_columns")
+            strategy = st.selectbox("Simple strategy", ["median", "mean", "mode"], key="pro_impute_strategy")
+            if st.button("Apply documented imputation", use_container_width=True):
                 cleaned, entries = impute_missing(st.session_state.analysis_df, selected, strategy)
                 st.session_state.analysis_df = cleaned
                 for entry in entries:
                     add_audit(entry)
-                st.success(f"Applied {len(entries)} documented variable treatment(s).")
-        with t4:
-            numeric = list(st.session_state.analysis_df.select_dtypes(include="number").columns)
-            selected = st.multiselect("Numeric variables", numeric, key="winsor_columns")
-            limits = st.selectbox("Limits", ["1% and 99%", "5% and 95%"])
-            st.warning("Winsorisation is offered only as a defensible sensitivity treatment. The untreated model must remain available.")
-            if st.button("Create winsorised analysis copy"):
-                lower, upper = (0.01, 0.99) if limits.startswith("1") else (0.05, 0.95)
-                cleaned, entries = winsorise(st.session_state.analysis_df, selected, lower, upper)
+                st.success(f"Applied {len(entries)} documented treatment(s).")
+        with c:
+            st.markdown("#### Sensitivity copy")
+            numeric = list(analysis_df.select_dtypes(include="number").columns)
+            selected_w = st.multiselect("Winsorise variables", numeric, key="pro_winsor_columns")
+            if st.button("Winsorise at 1% and 99%", use_container_width=True):
+                cleaned, entries = winsorise(st.session_state.analysis_df, selected_w, 0.01, 0.99)
                 st.session_state.analysis_df = cleaned
                 for entry in entries:
                     add_audit(entry)
-                st.success(f"Applied {len(entries)} documented treatment(s).")
-        with t5:
-            numeric = list(st.session_state.analysis_df.select_dtypes(include="number").columns)
-            selected = st.multiselect("Non-negative variables", numeric, key="log_columns")
-            if st.button("Create log1p variables"):
-                cleaned, entries = log1p_transform(st.session_state.analysis_df, selected)
+                st.success(f"Applied {len(entries)} documented sensitivity treatment(s).")
+            selected_l = st.multiselect("Create log1p variables", numeric, key="pro_log_columns")
+            if st.button("Create transformed variables", use_container_width=True):
+                cleaned, entries = log1p_transform(st.session_state.analysis_df, selected_l)
                 st.session_state.analysis_df = cleaned
                 for entry in entries:
                     add_audit(entry)
                 st.success(f"Created {len(entries)} transformed variable(s). Original variables were retained.")
+        st.markdown("---")
+        if st.button("Reset analysis data to original", type="secondary"):
+            st.session_state.analysis_df = st.session_state.original_df.copy()
+            st.session_state.audit_entries = [AuditEntry(action="Reset analysis data", details="Restored the analysis copy from the preserved original dataset.", justification="User-requested reset.", before_n=len(analysis_df), after_n=len(original_df))]
+            reset_analysis_result()
+            st.success("Analysis data restored from the original copy.")
 
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("Reset analysis data to original"):
-                st.session_state.analysis_df = st.session_state.original_df.copy()
-                st.session_state.audit_entries = [AuditEntry(
-                    action="Reset analysis data",
-                    details="Restored the analysis copy from the preserved original dataset.",
-                    justification="User-requested reset. All previous result objects were cleared.",
-                    before_n=len(original_df), after_n=len(original_df),
-                )]
-                reset_analysis_result()
-                st.success("Analysis copy reset.")
-        with c2:
-            st.download_button("Download current analysis data", data=analysis_df.to_csv(index=False), file_name="StatReady_Analysis_Data.csv", mime="text/csv")
+    if st.button("Continue to conceptual framework", type="primary"):
+        _go("Conceptual framework")
 
-with framework_tab:
-    st.subheader("Conceptual framework and variable roles")
+
+def _apply_structured_framework_to_variable_roles(mapped: dict) -> None:
+    frame = st.session_state.framework.copy()
+    if frame.empty:
+        return
+    item_set = {item for items in (mapped.get("construct_map") or {}).values() for item in items}
+    frame.loc[frame["variable"].isin(item_set), "role"] = "Scale item"
+    frame.loc[frame["variable"].isin(item_set), "coding_notes"] = "Matched to uploaded conceptual framework diagram"
+    st.session_state.framework = frame
+
+
+def page_framework() -> None:
+    hero("Confirm the conceptual framework", "Upload the framework diagram, let the vision agent extract constructs and paths, then confirm the variable matches before any model is estimated.")
     if st.session_state.analysis_df is None:
-        st.info("Load a dataset first.")
-    else:
-        st.write("Confirm how each dataset variable functions in the study. These roles guide method selection and reporting.")
-        if st.session_state.framework.empty or set(st.session_state.framework["variable"]) != set(st.session_state.analysis_df.columns):
-            st.session_state.framework = create_framework(st.session_state.analysis_df)
-        edited = st.data_editor(
-            st.session_state.framework,
-            use_container_width=True,
-            num_rows="fixed",
-            column_config={
-                "role": st.column_config.SelectboxColumn("Role", options=ROLE_OPTIONS, required=True),
-                "measurement": st.column_config.SelectboxColumn("Measurement", options=MEASUREMENT_OPTIONS, required=True),
-            },
-            disabled=["variable"],
-            key="framework_editor",
-        )
-        st.session_state.framework = edited
-        framework_notes = st.text_area(
-            "Framework narrative",
-            value=st.session_state.study.get("framework_notes", ""),
-            placeholder="Example: Digital competence predicts online teaching effectiveness. Motivation mediates the relationship, while institutional support moderates it.",
-        )
-        st.session_state.study["framework_notes"] = framework_notes
-        st.caption("Image extraction can be added later. Phase 2 uses confirmed structured roles and explicit construct specifications to avoid incorrect automatic interpretation.")
+        card("Dataset required", "Load the dataset first so diagram labels can be matched to actual columns.", "Required")
+        return
+    columns = list(st.session_state.analysis_df.columns)
+    left, right = st.columns([1, 1.15], gap="large")
+    with left:
+        st.markdown("### Diagram upload")
+        framework_file = st.file_uploader("Conceptual framework diagram", type=["png", "jpg", "jpeg", "webp"], key="framework_diagram_upload")
+        if framework_file is not None:
+            st.session_state.framework_image_bytes = framework_file.getvalue()
+            st.session_state.framework_image_name = framework_file.name
+            st.session_state.framework_image_mime = framework_file.type or "image/png"
+        if st.session_state.framework_image_bytes:
+            st.image(st.session_state.framework_image_bytes, caption=st.session_state.framework_image_name, use_container_width=True)
+            api_configured = bool(os.getenv("OPENAI_API_KEY") or st.session_state.get("temporary_openai_key"))
+            st.markdown(status_badge("Vision agent ready" if api_configured else "Vision API key required", "green" if api_configured else "gold"), unsafe_allow_html=True)
+            if not os.getenv("OPENAI_API_KEY"):
+                st.text_input("Temporary OpenAI API key for this session", type="password", key="temporary_openai_key", help="For production, store OPENAI_API_KEY as a secret environment variable on Render. Do not hard-code it in the repository.")
+            st.caption("Only the conceptual-framework image, objectives, hypotheses and dataset column names are sent for interpretation. The dataset values are not sent.")
+            if st.button("Interpret diagram with AI", type="primary", use_container_width=True):
+                with st.spinner("Reading constructs, indicators and arrow directions..."):
+                    vision = analyse_framework_image(
+                        st.session_state.framework_image_bytes,
+                        st.session_state.framework_image_mime,
+                        st.session_state.study.get("objectives", ""),
+                        st.session_state.study.get("hypotheses", ""),
+                        columns,
+                        api_key=st.session_state.get("temporary_openai_key") or None,
+                    )
+                st.session_state.framework_vision = vision
+                if vision.extraction is None:
+                    st.error(vision.error or "The framework could not be interpreted.")
+                else:
+                    st.session_state.study["framework_structured"] = vision.mapped_framework
+                    st.session_state.study["framework_notes"] = vision.mapped_framework.get("summary", "")
+                    _apply_structured_framework_to_variable_roles(vision.mapped_framework)
+                    st.success(f"The diagram was interpreted with {vision.provider}. Review every construct, item match and relationship before confirmation.")
+                    if vision.fallback_used:
+                        st.info("The low-cost vision model required escalation to the fallback model after confidence or graph validation checks.")
+                    for issue in vision.validation_issues:
+                        st.warning(issue)
+    with right:
+        st.markdown("### Extracted framework")
+        vision = st.session_state.framework_vision
+        mapped = st.session_state.study.get("framework_structured") or {}
+        if vision is None and not mapped:
+            card("No framework extraction yet", "Upload a clear diagram or use the structured variable editor below.", "Awaiting input")
+        else:
+            if vision is not None and getattr(vision, "extraction", None) is not None:
+                st.caption(f"Provider: {vision.provider} | Models attempted: {', '.join(vision.models_attempted) or 'Not recorded'}")
+                st.write(vision.extraction.diagram_summary)
+                construct_rows = [c.model_dump() for c in vision.extraction.constructs]
+                relationship_rows = [r.model_dump() for r in vision.extraction.relationships]
+                st.markdown("#### Constructs")
+                st.dataframe(pd.DataFrame(construct_rows), use_container_width=True, hide_index=True)
+                st.markdown("#### Relationships")
+                st.dataframe(pd.DataFrame(relationship_rows), use_container_width=True, hide_index=True)
+                if vision.mapping_table:
+                    st.markdown("#### Diagram-to-data matches")
+                    mapping_df = pd.DataFrame(vision.mapping_table)
+                    edited_mapping = st.data_editor(
+                        mapping_df,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "dataset_variable": st.column_config.SelectboxColumn("Dataset variable", options=[""] + columns),
+                            "status": st.column_config.TextColumn("Status", disabled=True),
+                            "match_score": st.column_config.NumberColumn("Match score", format="%.3f", disabled=True),
+                        },
+                        key="framework_mapping_editor",
+                    )
+                    if st.button("Apply reviewed item matches"):
+                        new_map: dict[str, list[str]] = {}
+                        for _, row in edited_mapping.iterrows():
+                            if row.get("dataset_variable"):
+                                new_map.setdefault(str(row["construct"]), []).append(str(row["dataset_variable"]))
+                        mapped["construct_map"] = {name: list(dict.fromkeys(items)) for name, items in new_map.items()}
+                        st.session_state.study["framework_structured"] = mapped
+                        _apply_structured_framework_to_variable_roles(mapped)
+                        st.success("Reviewed diagram-to-data matches applied.")
+            if mapped.get("construct_map") and mapped.get("paths"):
+                preview_config = {
+                    "construct_map": mapped.get("construct_map"),
+                    "paths": mapped.get("paths"),
+                    "structural_relations": mapped.get("structural_relations") or [],
+                    "diagram_settings": {"layout": "Left to right", "arrow_style": "Curved", "show_indicators": True, "show_indicator_names": True},
+                }
+                preview = proposed_diagram("pls_sem" if any(str(v).lower() == "formative" for v in (mapped.get("measurement_modes") or {}).values()) else "sem", preview_config, "Conceptual model before estimation")
+                if preview:
+                    st.markdown("#### Proposed model, not estimated")
+                    st.image(preview, use_container_width=True)
 
-with agent_tab:
-    st.subheader("AI Guided Mode for research and statistical decisions")
-    st.write("The guided agent uses the objectives, hypotheses, framework wording and dataset structure to complete the required analysis specification. It pauses only when a critical variable or design decision cannot be inferred safely. Data deletion and transformations always require human approval.")
-    guidance_level = st.selectbox(
-        "Guidance level", ["Novice", "Assisted", "Expert co-pilot"],
-        index=["Novice", "Assisted", "Expert co-pilot"].index(st.session_state.study.get("guidance_level", "Novice")),
+    st.markdown("---")
+    st.markdown("### Variable dictionary and role confirmation")
+    edited = st.data_editor(
+        st.session_state.framework,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "variable": st.column_config.TextColumn("Dataset variable", disabled=True),
+            "construct_label": st.column_config.TextColumn("Readable label"),
+            "role": st.column_config.SelectboxColumn("Analytical role", options=ROLE_OPTIONS),
+            "measurement": st.column_config.SelectboxColumn("Measurement level", options=MEASUREMENT_OPTIONS),
+            "expected_relationship": st.column_config.TextColumn("Expected relationship"),
+            "coding_notes": st.column_config.TextColumn("Coding or scale notes"),
+        },
+        key="professional_framework_editor",
     )
-    st.session_state.study["guidance_level"] = guidance_level
+    if st.button("Save framework and continue", type="primary"):
+        st.session_state.framework = edited
+        if not st.session_state.study.get("framework_notes"):
+            roles = edited[edited["role"] != "Unassigned"]
+            st.session_state.study["framework_notes"] = "; ".join(f"{row.variable}: {row.role}" for row in roles.itertuples())
+        st.session_state.analysis_program = None
+        _go("AI analysis plan")
 
-    if st.button("Review my study and dataset", type="primary", key="agent_review_button"):
-        st.session_state.agent_review = build_guided_review(
-            st.session_state.study, st.session_state.analysis_df, st.session_state.framework
-        )
 
-    review = st.session_state.get("agent_review")
-    if review is None:
-        st.info("Complete as much of the study design as possible, upload the dataset, then run the guided review.")
-    else:
-        st.markdown("### Recommended starting method")
-        st.success(f"**{review.method_label}**")
-        st.write(review.reason)
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("Use this method in analysis setup", key="agent_use_method"):
-                st.session_state.recommended_method_key = review.method_key
-                st.session_state.study["recommendation_reason"] = review.reason
-                st.session_state["analysis_method_label"] = review.method_label
-                st.success("The method has been selected as the starting method. Review its configuration before running it.")
-        with c2:
-            if st.button("Refresh review", key="agent_refresh"):
-                st.session_state.agent_review = build_guided_review(
-                    st.session_state.study, st.session_state.analysis_df, st.session_state.framework
-                )
-                st.rerun()
-
-        st.markdown("### Analysis readiness")
-        st.dataframe(review.readiness, use_container_width=True, hide_index=True)
-        outstanding = review.readiness[review.readiness["status"] != "Ready"]
-        if outstanding.empty:
-            st.success("The core study and data inputs are ready for method-specific configuration.")
-        else:
-            st.warning(f"{len(outstanding)} readiness item(s) still need attention.")
-
-        st.markdown("### Dataset findings")
-        st.dataframe(review.data_findings, use_container_width=True, hide_index=True)
-
-        if not review.role_suggestions.empty:
-            st.markdown("### Suggested variable roles")
-            st.caption("These are conservative suggestions, not final classifications. Review them against the objective and conceptual framework.")
-            st.dataframe(review.role_suggestions, use_container_width=True, hide_index=True)
-            apply_confidence = st.multiselect(
-                "Apply suggestions with confidence", ["High", "Medium", "Low"], default=["High", "Medium"],
-                key="agent_role_confidence",
-            )
-            if st.button("Apply selected role suggestions", key="agent_apply_roles"):
-                frame = st.session_state.framework.copy()
-                suggestions = review.role_suggestions[
-                    review.role_suggestions["confidence"].isin(apply_confidence)
-                    & (review.role_suggestions["suggested_role"] != "Unassigned")
-                ]
-                role_map = dict(zip(suggestions["variable"], suggestions["suggested_role"]))
-                measurement_map = dict(zip(suggestions["variable"], suggestions["measurement"]))
-                frame["role"] = [role_map.get(variable, role) for variable, role in zip(frame["variable"], frame["role"])]
-                frame["measurement"] = [measurement_map.get(variable, measurement) for variable, measurement in zip(frame["variable"], frame["measurement"])]
-                st.session_state.framework = frame
-                st.session_state.agent_review = build_guided_review(
-                    st.session_state.study, st.session_state.analysis_df, st.session_state.framework
-                )
-                st.success(f"Applied {len(role_map)} reviewable suggestion(s). Open the conceptual-framework tab to confirm or edit them.")
-
-        if review.construct_suggestions:
-            st.markdown("### Suggested construct blocks")
-            construct_frame = pd.DataFrame([{
-                "construct": item["name"],
-                "suggested_items": ", ".join(item["items"]),
-                "measurement": item["mode"],
-                "confidence": item["confidence"],
-                "rationale": item["rationale"],
-            } for item in review.construct_suggestions])
-            st.dataframe(construct_frame, use_container_width=True, hide_index=True)
-            target_method = st.selectbox("Load suggestions into", ["PLS-SEM", "Covariance-based SEM", "CFA"], key="agent_construct_target")
-            if st.button("Load construct suggestions for confirmation", key="agent_apply_constructs"):
-                target_key = {"PLS-SEM": "pls_sem", "Covariance-based SEM": "sem", "CFA": "cfa"}[target_method]
-                definitions = []
-                for suggestion in review.construct_suggestions:
-                    mode = suggestion["mode"] if target_key == "pls_sem" else "Reflective common-factor"
-                    definitions.append({"name": suggestion["name"], "mode": mode, "items": suggestion["items"]})
-                st.session_state.study[f"{target_key}_construct_definitions"] = definitions
-                st.session_state.recommended_method_key = target_key
-                st.session_state["analysis_method_label"] = METHOD_LABELS[target_key]
-                st.success("Suggestions were loaded into the construct builder. Confirm names, indicators, measurement modes and structural relationships before analysis.")
-
-        st.markdown("### AI-completed analysis specification")
-        auto_spec = review.auto_specification
-        if auto_spec is None:
-            st.info("Upload a dataset to generate a complete analysis specification.")
-        else:
-            st.write(f"**Completion confidence: {auto_spec.confidence}**")
-            st.dataframe(auto_spec.completed_fields, use_container_width=True, hide_index=True)
-            if auto_spec.assumptions_for_confirmation:
-                st.markdown("**Provisional assumptions to confirm**")
-                for assumption in auto_spec.assumptions_for_confirmation:
-                    st.info(assumption)
-            if auto_spec.critical_blockers:
-                st.error("Critical human input is required before the model can run.")
-                for blocker in auto_spec.critical_blockers:
-                    st.write(f"• {blocker}")
-            else:
-                confirm_spec = st.checkbox(
-                    "I confirm that the inferred variables, directions, measurement blocks and construction rules match the study.",
-                    key="agent_confirm_auto_spec",
-                )
-                cauto1, cauto2 = st.columns(2)
-                with cauto1:
-                    if st.button("Use the complete AI specification", key="agent_apply_full_spec"):
-                        apply_auto_spec_to_state(auto_spec)
-                        st.success("The complete specification, variable roles and provisional framework have been applied. It can be run here or reviewed in the analysis workspace.")
-                with cauto2:
-                    if st.button("Run AI-completed analysis", type="primary", disabled=not confirm_spec, key="agent_run_full_spec"):
-                        try:
-                            validation_error = validate_config(auto_spec.method_key, auto_spec.config)
-                            if validation_error:
-                                st.error(validation_error)
-                            else:
-                                with st.spinner("Running the AI-completed analysis and diagnostics..."):
-                                    result = run_analysis(st.session_state.analysis_df, auto_spec.method_key, auto_spec.config)
-                                st.session_state.analysis_result = result
-                                st.session_state.analysis_plan = analysis_plan_frame(auto_spec.method_label, auto_spec.config)
-                                st.session_state.study["method"] = auto_spec.method_label
-                                st.session_state.study["alpha"] = auto_spec.config.get("alpha", st.session_state.study.get("alpha", 0.05))
-                                apply_auto_spec_to_state(auto_spec)
-                                st.success("Analysis completed. Review the diagnostics, diagrams and paper-ready reporting outputs.")
-                        except Exception as exc:
-                            st.error(f"The guided analysis could not be completed: {exc}")
-
-        st.markdown("### Guided next actions")
-        for number, action in enumerate(review.next_actions, start=1):
-            st.write(f"{number}. {action}")
-
-with analysis_tab:
-    st.subheader("Configure and run analysis")
+def page_agent() -> None:
+    hero("AI-guided analysis programme", "The agent maps every objective and hypothesis to a separate analysis, completes defensible fields from the study, diagram and data, and flags only decisions that require human judgement.")
     if st.session_state.analysis_df is None:
-        st.info("Load a dataset before configuring an analysis.")
-    else:
-        df = st.session_state.analysis_df
-        columns = list(df.columns)
-        numeric_columns = list(df.select_dtypes(include="number").columns)
-        default_label = METHOD_LABELS.get(st.session_state.recommended_method_key, METHOD_LABELS["descriptive"])
-        labels = list(METHOD_OPTIONS.keys())
-        default_index = labels.index(default_label) if default_label in labels else 0
-        if st.session_state.get("analysis_method_label") not in labels:
-            st.session_state["analysis_method_label"] = default_label
-        selected_label = st.selectbox("Statistical method", labels, index=default_index, key="analysis_method_label")
-        selected_key = METHOD_OPTIONS[selected_label]
-        config = render_method_configuration(selected_key, columns, numeric_columns)
-        saved_auto_spec = st.session_state.get("auto_specification")
-        if saved_auto_spec is not None and getattr(saved_auto_spec, "method_key", None) == selected_key:
-            with st.expander("AI-completed configuration available", expanded=True):
-                st.dataframe(saved_auto_spec.completed_fields, use_container_width=True, hide_index=True)
-                use_auto = st.checkbox("Use these completed values for this run", value=True, key="analysis_use_auto_spec")
-                if use_auto:
-                    config = dict(saved_auto_spec.config)
-                    st.caption("The AI-completed values replace the manual controls above for this run. Clear the checkbox to use the manual selections.")
-        config["alpha"] = float(config.get("alpha", st.session_state.study.get("alpha", 0.05)))
-        if selected_key in {"cfa", "sem"}:
-            st.warning("CFA and covariance-based SEM use an internal covariance-fitting engine with ML, GLS, ULS and DWLS objectives. Confirm publication-critical models in specialist SEM software, especially for ordinal indicators, complex models or small samples.")
-        if selected_key == "pls_sem":
-            st.warning("The internal PLS-SEM engine supports reflective and formative blocks, mediation and two-stage latent-score moderation. Confirm publication-critical estimates in specialist PLS-SEM software.")
+        card("Dataset required", "Load the dataset before the agent can complete variable and estimator settings.", "Required")
+        return
 
-        st.markdown("#### Pre-analysis confirmation")
-        preview_plan = analysis_plan_frame(selected_label, config)
-        st.dataframe(preview_plan, use_container_width=True, hide_index=True)
-        st.warning("Confirm that the variable roles, measurement levels, unit of analysis and sampling design support this method. The app cannot infer design features that are absent from the data and study description.")
+    deepseek_configured = bool(os.getenv("DEEPSEEK_API_KEY") or st.session_state.get("temporary_deepseek_key"))
+    left_status, right_status = st.columns([1, 1.4])
+    with left_status:
+        st.markdown(status_badge("DeepSeek planning agent ready" if deepseek_configured else "Local planning fallback", "green" if deepseek_configured else "gold"), unsafe_allow_html=True)
+    with right_status:
+        st.caption("Only objectives, hypotheses, reviewed framework, variable names, data types, unique counts and missingness percentages are sent. Raw dataset rows are never sent to the reasoning provider.")
+    if not os.getenv("DEEPSEEK_API_KEY"):
+        st.text_input("Temporary DeepSeek API key for this session", type="password", key="temporary_deepseek_key", help="For production, store DEEPSEEK_API_KEY as a secret environment variable on Render. Do not commit it to GitHub.")
 
-        if st.button("Run statistical analysis", type="primary"):
-            validation_error = validate_config(selected_key, config)
-            if validation_error:
-                st.error(validation_error)
+    if st.button("Build or refresh the complete analysis programme", type="primary"):
+        with st.spinner("Mapping objectives, hypotheses and validated framework evidence..."):
+            st.session_state.analysis_program = build_analysis_program(
+                st.session_state.study,
+                st.session_state.analysis_df,
+                st.session_state.framework,
+                api_key=st.session_state.get("temporary_deepseek_key") or None,
+            )
+        st.success("Objective-specific analysis programme generated.")
+    programme = st.session_state.analysis_program
+    if programme is None:
+        st.info("Select the button above to generate the full programme.")
+        return
+
+    provider_note = f"Planning provider: {programme.provider}"
+    if programme.models_attempted:
+        provider_note += f" | Models attempted: {', '.join(programme.models_attempted)}"
+    if programme.fallback_used:
+        provider_note += " | Controlled fallback used"
+    st.caption(provider_note)
+    for warning in programme.provider_warnings:
+        st.info(warning)
+
+    ready = sum(a.status == "Ready for confirmation" for a in programme.assignments)
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Objective analyses", len(programme.assignments))
+    m2.metric("Ready for confirmation", ready)
+    m3.metric("Human intervention required", len(programme.assignments) - ready)
+    st.markdown("### Objective and hypothesis coverage")
+    st.dataframe(programme.mapping_table, use_container_width=True, hide_index=True)
+
+    for assignment in programme.assignments:
+        status_style = "green" if assignment.status == "Ready for confirmation" else "gold"
+        with st.expander(f"{assignment.objective_id}: {assignment.method_label}", expanded=assignment.status != "Ready for confirmation"):
+            st.markdown(status_badge(assignment.status, status_style), unsafe_allow_html=True)
+            st.write(f"**Objective:** {assignment.objective}")
+            st.write(f"**Hypothesis:** {assignment.hypothesis or 'No confirmatory hypothesis stated'}")
+            st.caption(assignment.rationale)
+            spec = assignment.specification
+            if spec is None:
+                st.error("A specification could not be generated.")
+                continue
+            st.dataframe(spec.completed_fields, use_container_width=True, hide_index=True)
+            preview = proposed_diagram(assignment.method_key, spec.config, f"{assignment.objective_id} proposed model before estimation")
+            if preview:
+                st.markdown("#### Model before estimation")
+                st.image(preview, use_container_width=True)
+            if spec.assumptions_for_confirmation:
+                st.markdown("#### Provisional assumptions")
+                for item in spec.assumptions_for_confirmation:
+                    st.info(item)
+            if spec.critical_blockers:
+                st.markdown("#### Critical human decisions")
+                for blocker in spec.critical_blockers:
+                    st.warning(blocker)
             else:
-                try:
-                    with st.spinner("Running the analysis and diagnostics..."):
-                        result = run_analysis(df, selected_key, config)
-                    st.session_state.analysis_result = result
-                    st.session_state.analysis_plan = preview_plan
-                    st.session_state.study["method"] = selected_label
-                    st.session_state.study["alpha"] = config["alpha"]
-                    st.success("Analysis completed. Review the diagnostics before using the results.")
-                except Exception as exc:
-                    st.error(f"Analysis could not be completed: {exc}")
+                if st.button(f"Run {assignment.objective_id} analysis", key=f"run_assignment_{assignment.objective_id}"):
+                    try:
+                        with st.spinner(f"Running {assignment.objective_id}..."):
+                            _run_one_spec(assignment.objective_id, assignment.objective_id, assignment.objective, assignment.hypothesis_id, assignment.hypothesis, assignment.method_key, assignment.method_label, spec.config)
+                        st.success(f"{assignment.objective_id} completed and linked to its objective and hypothesis.")
+                    except Exception as exc:
+                        st.error(f"{assignment.objective_id} could not be completed: {exc}")
 
-with results_tab:
-    st.subheader("Results, diagnostics and reproducibility package")
-    result = st.session_state.analysis_result
-    if result is None:
-        st.info("Run an analysis to generate results and exports.")
-    else:
-        st.markdown(f"### {result.method}")
-        st.write(result.summary)
-        if result.warnings:
-            for warning in result.warnings:
-                st.warning(warning)
+    st.markdown("---")
+    confirm_all = st.checkbox("I confirm the agent's variable roles, causal directions, measurement blocks and estimator choices for all analyses marked ready.")
+    if st.button("Run all ready objective-specific analyses", type="primary", disabled=not confirm_all):
+        progress = st.progress(0, text="Starting analysis programme...")
+        completed = 0
+        failures = []
+        runnable = [a for a in programme.assignments if a.specification and not a.specification.critical_blockers]
+        for index, assignment in enumerate(runnable, start=1):
+            try:
+                progress.progress((index - 1) / max(len(runnable), 1), text=f"Running {assignment.objective_id}: {assignment.method_label}")
+                _run_one_spec(assignment.objective_id, assignment.objective_id, assignment.objective, assignment.hypothesis_id, assignment.hypothesis, assignment.method_key, assignment.method_label, assignment.specification.config)
+                completed += 1
+            except Exception as exc:
+                failures.append(f"{assignment.objective_id}: {exc}")
+        progress.progress(1.0, text="Analysis programme finished")
+        if completed:
+            st.success(f"Completed {completed} objective-specific analysis or analyses.")
+        for failure in failures:
+            st.error(failure)
+        if completed:
+            if st.button("Open results", key="open_batch_results"):
+                _go("Results and exports")
 
-        latent_payload = latent_diagram_payload(result)
-        if latent_payload:
-            construct_map, paths, _, _, _, editor_figure_name, _ = latent_payload
-            st.markdown("### Interactive path-diagram editor")
-            st.caption("Drag constructs directly, or click a construct and use the arrow controls. Select Save arrangement to update the publication-quality PNG, DOCX, Excel and reproducibility exports.")
-            saved_positions = (result.metadata.get("diagram_settings") or {}).get("custom_positions") or st.session_state.diagram_positions.get(editor_figure_name, {})
-            edited_positions = path_editor(
-                nodes=list(construct_map), edges=paths, positions=saved_positions,
-                height=680, key=f"path_editor_{editor_figure_name}",
-            )
-            if edited_positions and edited_positions != saved_positions:
-                st.session_state.diagram_positions[editor_figure_name] = edited_positions
-                update_result_diagram(result, edited_positions)
-                st.success("The saved arrangement has been applied to the result diagram and all new exports.")
-            arrangement = (result.metadata.get("diagram_settings") or {}).get("custom_positions") or edited_positions or saved_positions
-            if arrangement:
-                import json as _json
-                st.download_button(
-                    "Download diagram arrangement", _json.dumps(arrangement, indent=2),
-                    file_name="StatReady_path_diagram_arrangement.json", mime="application/json",
-                    key="download_diagram_arrangement",
-                )
 
-        interactive_network = result.metadata.get("interactive_network_html")
-        if interactive_network:
-            st.markdown("### Interactive network diagram")
-            st.caption("Drag nodes and click a node to inspect its centrality and community measures. The static publication diagrams remain available below.")
-            components.html(interactive_network, height=720, scrolling=False)
-            st.download_button(
-                "Download interactive network HTML", interactive_network,
-                file_name="StatReady_Interactive_Network.html", mime="text/html",
-                key="download_interactive_network",
-            )
+def page_manual() -> None:
+    hero("Manual analysis workspace", "Advanced users can override the guided plan. A non-estimated diagram and complete specification are shown before the model runs.")
+    if st.session_state.analysis_df is None:
+        card("Dataset required", "Load the dataset before configuring an analysis.", "Required")
+        return
+    df = st.session_state.analysis_df
+    columns = list(df.columns)
+    numeric_columns = list(df.select_dtypes(include="number").columns)
+    labels = list(METHOD_OPTIONS.keys())
+    default_label = METHOD_LABELS.get(st.session_state.recommended_method_key, METHOD_LABELS["descriptive"])
+    selected_label = st.selectbox("Statistical method", labels, index=labels.index(default_label) if default_label in labels else 0, key="professional_analysis_method")
+    selected_key = METHOD_OPTIONS[selected_label]
+    with st.container(border=True):
+        config = render_method_configuration(selected_key, columns, numeric_columns)
+    config["alpha"] = float(config.get("alpha", st.session_state.study.get("alpha", 0.05)))
+    st.markdown("### Pre-estimation review")
+    preview_plan = analysis_plan_frame(selected_label, config)
+    st.dataframe(preview_plan, use_container_width=True, hide_index=True)
+    preview = proposed_diagram(selected_key, config, "Selected model before estimation")
+    if preview:
+        st.image(preview, caption="Proposed relationships and selected variables, not yet estimated", use_container_width=True)
+    st.warning("Confirm causal direction, variable measurement, unit of analysis and sampling design. The app will not invent design information absent from the study or data.")
+    if st.button("Run confirmed analysis", type="primary"):
+        objectives = _research_items(st.session_state.study.get("objectives", ""), "O")
+        hypotheses = _research_items(st.session_state.study.get("hypotheses", ""), "H")
+        objective_id, objective = objectives[0] if objectives else ("Manual", st.session_state.study.get("objective", "Manual analysis"))
+        hypothesis_id, hypothesis = hypotheses[0] if hypotheses else ("", st.session_state.study.get("hypothesis", ""))
+        try:
+            with st.spinner("Running analysis, diagnostics and sensitivity procedures..."):
+                _run_one_spec("Manual", objective_id, objective, hypothesis_id, hypothesis, selected_key, selected_label, config)
+            st.success("Analysis completed. The proposed and estimated diagrams are available in Results and exports.")
+        except Exception as exc:
+            st.error(f"Analysis could not be completed: {exc}")
 
-        if result.figures:
-            st.markdown("### Diagrams and figures")
-            st.caption("Interpret figures together with coefficient, diagnostic, stability and model-fit tables.")
-            for figure_index, (figure_name, figure_bytes) in enumerate(result.figures.items(), start=1):
-                st.image(figure_bytes, caption=figure_name, use_container_width=True)
-                safe_name = "".join(ch if ch.isalnum() else "_" for ch in figure_name).strip("_")
-                st.download_button(
-                    f"Download {figure_name} (PNG)",
-                    figure_bytes,
-                    file_name=f"{safe_name}.png",
-                    mime="image/png",
-                    key=f"figure_download_{figure_index}_{safe_name}",
-                )
 
-        descriptive_tables = {name: table for name, table in result.tables.items() if name.startswith("Descriptive ")}
-        inferential_tables = {name: table for name, table in result.tables.items() if not name.startswith("Descriptive ")}
+def _render_result_figures(record: dict) -> None:
+    result = record["result"]
+    latent_payload = latent_diagram_payload(result)
+    if latent_payload:
+        construct_map, paths, _, _, _, editor_figure_name, _ = latent_payload
+        st.markdown("#### Refine the estimated path diagram")
+        st.caption("Drag constructs or click a construct and use the movement controls. Saved positions update the PNG and all new exports.")
+        saved_positions = (result.metadata.get("diagram_settings") or {}).get("custom_positions") or st.session_state.diagram_positions.get(editor_figure_name, {})
+        edited_positions = path_editor(nodes=list(construct_map), edges=paths, positions=saved_positions, height=680, key=f"path_editor_{record['objective_id']}_{editor_figure_name}")
+        if edited_positions and edited_positions != saved_positions:
+            st.session_state.diagram_positions[editor_figure_name] = edited_positions
+            update_result_diagram(result, edited_positions)
+            st.success("The estimated diagram and future exports now use the saved arrangement.")
+    if result.metadata.get("interactive_network_html"):
+        st.markdown("#### Interactive network")
+        components.html(result.metadata["interactive_network_html"], height=720, scrolling=False)
+    for index, (name, figure) in enumerate(result.figures.items(), start=1):
+        st.markdown(f"#### {name}")
+        st.image(figure, use_container_width=True)
+        safe = "".join(ch if ch.isalnum() else "_" for ch in name).strip("_")
+        st.download_button(f"Download {name}", figure, f"{safe}.png", "image/png", key=f"professional_fig_{record['objective_id']}_{index}")
 
-        if descriptive_tables:
-            st.markdown("### Descriptive statistics")
-            st.caption(result.metadata.get("descriptive_summary", "Automatically generated for the variables used in this analysis."))
-            descriptive_display_names = {
-                "Descriptive sample overview": "Analysis sample overview",
-                "Descriptive statistics - Numeric variables": "Numeric variables",
-                "Descriptive statistics - Categorical summary": "Categorical summary",
-                "Descriptive statistics - Frequencies": "Frequencies",
-                "Descriptive statistics - By group": "Descriptive statistics by group",
-                "Descriptive profile overview": "Profile sample overview",
-                "Descriptive profile - Numeric variables": "Profile numeric variables",
-                "Descriptive profile - Categorical summary": "Profile categorical summary",
-                "Descriptive profile - Frequencies": "Profile frequencies",
-            }
-            for name, table in descriptive_tables.items():
-                display_name = descriptive_display_names.get(
-                    name, name.replace("Descriptive statistics - ", "").replace("Descriptive ", "")
-                )
-                with st.expander(display_name, expanded=display_name in {"Analysis sample overview", "Numeric variables"}):
-                    st.dataframe(table, use_container_width=True, hide_index=True)
 
-        if inferential_tables:
-            st.markdown("### Inferential results")
-            for name, table in inferential_tables.items():
-                with st.expander(name, expanded=name in {"Selected coefficient table", "Test result", "Model fit", "Indirect effect", "Multicollinearity action summary", "Ridge sensitivity model fit", "CFA fit indices", "SEM fit indices", "Structural path estimates", "PLS-SEM model summary", "PLS structural path estimates", "Construct reliability and convergent validity", "HTMT discriminant validity", "Multilevel model fit and variance partition", "Multilevel fixed effects", "Panel model decision", "Repeated-measures ANOVA", "Fixed effects", "Parallel indirect effects", "Conditional indirect effects"}):
-                    st.dataframe(table, use_container_width=True, hide_index=True)
+def page_results() -> None:
+    hero("Results linked to every objective", "Review the proposed model, final estimates, assumptions, sensitivity analyses and reproducibility files for each objective and hypothesis.")
+    if not st.session_state.analysis_results:
+        if st.session_state.analysis_result is None:
+            card("No results yet", "Run the guided programme or a manual analysis.", "Awaiting analysis")
+            return
+        _store_result("Latest", st.session_state.analysis_result, {}, "", st.session_state.analysis_result.method, "O1", st.session_state.study.get("objective", ""), "H1", st.session_state.study.get("hypothesis", ""))
+    keys = list(st.session_state.analysis_results)
+    active = st.session_state.active_result_key if st.session_state.active_result_key in keys else keys[0]
+    selected = st.selectbox("Select objective-specific result", keys, index=keys.index(active))
+    st.session_state.active_result_key = selected
+    record = st.session_state.analysis_results[selected]
+    result = record["result"]
 
-        st.markdown("### Diagnostics and assumptions")
+    st.markdown(
+        status_badge(record["objective_id"], "teal")
+        + status_badge(record["hypothesis_id"] or "No hypothesis", "blue")
+        + status_badge(record["method_label"], "green"),
+        unsafe_allow_html=True,
+    )
+    st.markdown(f"### {record['objective']}")
+    if record["hypothesis"]:
+        st.write(f"**Hypothesis addressed:** {record['hypothesis']}")
+    st.write(result.summary)
+    for warning in result.warnings:
+        st.warning(warning)
+
+    overview_tab, figure_tab, table_tab, diagnostic_tab, export_tab = st.tabs(["Overview", "Diagrams", "Results tables", "Diagnostics", "Exports"])
+    with overview_tab:
+        st.markdown("#### Analysis specification")
+        st.dataframe(record["plan"], use_container_width=True, hide_index=True)
+        if result.metadata.get("diagnostic_response"):
+            st.info(result.metadata["diagnostic_response"])
+        if result.metadata.get("descriptive_summary"):
+            st.markdown("#### Descriptive summary")
+            st.write(result.metadata["descriptive_summary"])
+    with figure_tab:
+        if result.figures or result.metadata.get("interactive_network_html"):
+            _render_result_figures(record)
+        else:
+            st.info("This analysis does not require a path or network diagram.")
+    with table_tab:
+        for name, table in result.tables.items():
+            with st.expander(name, expanded=name in {"Objective and hypothesis addressed", "Selected coefficient table", "Model fit", "Structural path estimates", "PLS structural path estimates", "Test result"}):
+                st.dataframe(table, use_container_width=True, hide_index=True)
+    with diagnostic_tab:
+        st.markdown("#### Assumptions and diagnostics")
         if result.diagnostics.empty:
-            st.write("No method-specific diagnostic table was generated.")
+            st.info("No method-specific diagnostic table was generated.")
         else:
             st.dataframe(result.diagnostics, use_container_width=True, hide_index=True)
-            concerns = result.diagnostics[result.diagnostics["status"].isin(["Minor concern", "Material concern"])]
+            concerns = result.diagnostics[result.diagnostics["status"].isin(["Minor concern", "Material concern"])] if "status" in result.diagnostics else pd.DataFrame()
             if concerns.empty:
-                st.success("No diagnostic was classified as a material or minor concern.")
+                st.success("No diagnostic was classified as a minor or material concern.")
             else:
-                st.warning(f"{len(concerns)} diagnostic item(s) require interpretation or sensitivity analysis. Review the recommended responses rather than altering data to seek significance.")
-
-        if result.metadata.get("diagnostic_response"):
-            st.markdown("### Diagnostic response and alternative model")
-            st.info(result.metadata["diagnostic_response"])
-
-        st.markdown("### Treatment and analysis audit trail")
-        combined_audit = audit_frame(st.session_state.audit_entries + result.treatment_log)
-        st.dataframe(combined_audit, use_container_width=True, hide_index=True)
-
-        st.markdown("### Supporting methodological literature")
-        refs = references_for_method(result.method, result.diagnostics)
-        st.dataframe(refs, use_container_width=True, hide_index=True)
-        st.caption("Phase 2 uses a curated methodological library. Live DOI and metadata verification can be connected to CiteIntegrity in the next integration step.")
-
-        st.markdown("### Export")
-        study = st.session_state.study
-        plan = st.session_state.analysis_plan
-        original_df = st.session_state.original_df
-        analysis_df = st.session_state.analysis_df
+                st.warning(f"{len(concerns)} diagnostic item(s) require interpretation or a documented sensitivity response.")
+        st.markdown("#### Audit trail")
+        st.dataframe(audit_frame(st.session_state.audit_entries + result.treatment_log), use_container_width=True, hide_index=True)
+        st.markdown("#### Methodological literature")
+        st.dataframe(references_for_method(result.method, result.diagnostics), use_container_width=True, hide_index=True)
+    with export_tab:
         try:
-            docx_bytes = build_docx_report(result, study, plan, st.session_state.audit_entries)
-            xlsx_bytes = build_excel_report(original_df, analysis_df, result, plan, st.session_state.audit_entries)
-            zip_bytes = build_reproducibility_package(original_df, analysis_df, result, study, plan, st.session_state.audit_entries)
+            docx_bytes = build_docx_report(result, record["study"], record["plan"], st.session_state.audit_entries)
+            xlsx_bytes = build_excel_report(st.session_state.original_df, st.session_state.analysis_df, result, record["plan"], st.session_state.audit_entries)
+            zip_bytes = build_reproducibility_package(st.session_state.original_df, st.session_state.analysis_df, result, record["study"], record["plan"], st.session_state.audit_entries)
             c1, c2, c3 = st.columns(3)
-            c1.download_button("Download DOCX report", docx_bytes, "StatReady_Report.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-            c2.download_button("Download Excel results", xlsx_bytes, "StatReady_Results.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            c3.download_button("Download full reproducibility ZIP", zip_bytes, "StatReady_Reproducibility_Package.zip", "application/zip")
+            c1.download_button("DOCX report", docx_bytes, f"StatReady_{selected}_Report.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
+            c2.download_button("Excel results", xlsx_bytes, f"StatReady_{selected}_Results.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+            c3.download_button("Reproducibility ZIP", zip_bytes, f"StatReady_{selected}_Reproducibility.zip", "application/zip", use_container_width=True)
+            if len(st.session_state.analysis_results) > 1:
+                st.download_button("Download complete objective-by-objective analysis package", _batch_export(), "StatReady_Complete_Analysis_Programme.zip", "application/zip", type="primary")
         except Exception as exc:
             st.error(f"Export generation failed: {exc}")
-
         with st.expander("Generated reproducibility code"):
             st.code(result.reproducible_code, language="python")
 
-st.divider()
-st.caption("StatReady AI Phase 2.4 | Drag-and-click path editing | Autonomous guided analysis | Comprehensive network analysis | Original data preserved")
+
+page = _sidebar()
+if page == "Study design":
+    page_study()
+elif page == "Data and preparation":
+    page_data()
+elif page == "Conceptual framework":
+    page_framework()
+elif page == "AI analysis plan":
+    page_agent()
+elif page == "Manual analysis":
+    page_manual()
+else:
+    page_results()
+
+st.markdown("---")
+st.caption("StatReady AI Phase 2.6 | Cost-aware hybrid AI | Validated framework vision | Objective-specific planning | Deterministic statistical computation | Reproducible reporting")

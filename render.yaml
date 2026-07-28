@@ -7,3 +7,27 @@ services:
     autoDeployTrigger: commit
     healthCheckPath: /_stcore/health
     dockerfilePath: ./Dockerfile
+
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: OPENAI_VISION_MODEL
+        value: gpt-5.4-nano
+      - key: OPENAI_VISION_FALLBACK_MODEL
+        value: gpt-5.6-luna
+      - key: OPENAI_VISION_DETAIL
+        value: low
+      - key: OPENAI_VISION_FALLBACK_DETAIL
+        value: high
+      - key: OPENAI_VISION_MAX_DIMENSION
+        value: "1800"
+      - key: DEEPSEEK_BASE_URL
+        value: https://api.deepseek.com
+      - key: AGENT_REASONING_MODEL
+        value: deepseek-v4-flash
+      - key: AGENT_REASONING_FALLBACK_MODEL
+        value: deepseek-v4-pro
+      - key: AGENT_MAX_OUTPUT_TOKENS
+        value: "12000"
