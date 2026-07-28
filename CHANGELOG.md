@@ -1,3 +1,11 @@
+# Version 2.6.1
+
+- Completed the Render environment-variable manifest.
+- Added `OPENAI_VISION_JPEG_QUALITY=88`.
+- Added non-secret AI defaults to the Docker image for manual Render web-service deployments.
+- Added a Render environment setup guide.
+- Kept API keys as secret-only values.
+
 # Changelog
 
 ## 2.6.0

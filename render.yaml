@@ -23,6 +23,8 @@ services:
         value: high
       - key: OPENAI_VISION_MAX_DIMENSION
         value: "1800"
+      - key: OPENAI_VISION_JPEG_QUALITY
+        value: "88"
       - key: DEEPSEEK_BASE_URL
         value: https://api.deepseek.com
       - key: AGENT_REASONING_MODEL
