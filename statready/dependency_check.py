@@ -22,6 +22,8 @@ def check_runtime_dependencies() -> dict[str, str]:
     import matplotlib.pyplot
     import PIL
     import networkx
+    import openai
+    import pydantic
 
     modules = {
         "streamlit": streamlit,
@@ -37,6 +39,8 @@ def check_runtime_dependencies() -> dict[str, str]:
         "matplotlib": matplotlib,
         "Pillow": PIL,
         "networkx": networkx,
+        "openai": openai,
+        "pydantic": pydantic,
     }
     return {name: str(getattr(module, "__version__", "installed")) for name, module in modules.items()}
 

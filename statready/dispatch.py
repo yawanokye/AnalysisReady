@@ -19,6 +19,7 @@ from .methods import (
     paired_t_test,
 )
 from .figures import attach_latent_variable_figures
+from .analysis_diagrams import attach_observed_path_figures, proposed_diagram
 from .pls_sem import partial_least_squares_sem
 from .multilevel import multilevel_linear_model
 from .phase2 import (
@@ -325,5 +326,10 @@ def run_analysis(df: pd.DataFrame, method_key: str, config: dict[str, Any]):
     result = _attach_specified_relation_effects(result, config.get("structural_relations"), alpha)
     result.metadata["diagram_settings"] = config.get("diagram_settings") or {}
     result.metadata["structural_relations"] = config.get("structural_relations") or []
+    if method_key in {"sem", "pls_sem"}:
+        preview = proposed_diagram(method_key, config, "Proposed model before estimation")
+        if preview:
+            result.figures = {"Proposed model before estimation": preview, **result.figures}
     result = attach_latent_variable_figures(result)
+    result = attach_observed_path_figures(result, method_key, config)
     return _attach_automatic_descriptives(df, method_key, config, result)

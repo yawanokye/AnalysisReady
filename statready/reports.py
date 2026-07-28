@@ -170,7 +170,7 @@ def build_docx_report(
 
     title = document.add_heading(study.get("title") or "StatReady Analysis Report", level=0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    subtitle = document.add_paragraph("Phase 2.4 statistical analysis, advanced models, network analysis, diagnostics and reproducibility report")
+    subtitle = document.add_paragraph("Phase 2.6 guided statistical analysis, validated AI planning, diagnostics and reproducibility report")
     subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     document.add_heading("Study specification", level=1)
@@ -311,6 +311,7 @@ def build_docx_report(
             text += f" DOI: {row['doi']}"
         document.add_paragraph(text, style="List Bullet")
 
+    document.add_page_break()
     document.add_heading("Reproducibility code", level=1)
     code_paragraph = document.add_paragraph()
     code_run = code_paragraph.add_run(result.reproducible_code or "No code generated.")

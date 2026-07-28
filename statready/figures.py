@@ -397,7 +397,10 @@ def render_latent_path_diagram(
     label_font = _font(int((13 if compact else 16) * scale), True)
     small_font = _font(int((12 if compact else 14) * scale))
     _center_text(draw, (width / 2, 45 * scale), title, title_font, palette["ink"])
-    subtitle = f"Layout: {layout} | Ellipses = constructs | Rectangles = indicators | Standardised estimates"
+    has_estimates = not path_table.empty or (isinstance(loading_table, pd.DataFrame) and not loading_table.empty)
+    estimate_label = "Standardised estimates" if has_estimates else "Proposed relationships, not estimated"
+    indicator_label = " | Rectangles = indicators" if show_indicators else ""
+    subtitle = f"Layout: {layout} | Ellipses = constructs{indicator_label} | {estimate_label}"
     _center_text(draw, (width / 2, 82 * scale), subtitle, small_font, palette["muted"])
 
     positions = _latent_positions(nodes, paths, width, structural_bottom, layout)
